@@ -25,9 +25,8 @@ class TestEvaluator(unittest.TestCase):
         self.tmp_dir.cleanup()
 
     def test_reviewer_golden_rule_missing_evidence(self):
-        """Test #7: Reviewer 在缺证据时能返回 Insufficient evidence，不要猜"""
+        """Reviewer 在缺证据时能返回 Insufficient evidence，不要猜"""
         challenger = ModelMetadata(canonical_id="challenger-x", display_name="Challenger X", provider="Org")
-        # Evidence is from generic coding or reasoning, not dedicated code review
         non_review_evidence = [
             BenchmarkEvidence(
                 source="LiveBench",
@@ -43,8 +42,16 @@ class TestEvaluator(unittest.TestCase):
         self.assertEqual(res.replace, ReplaceVerdict.NO)
         self.assertIn("Reviewer requires strict direct evidence", res.replace_rationale)
 
+    def test_multimodal_audit_missing_evidence(self):
+        """Test Issue #2: Multimodal 在缺乏可靠结构化结果时必须返回 ? Insufficient evidence"""
+        challenger = ModelMetadata(canonical_id="challenger-x", display_name="Challenger X", provider="Org")
+        # No verified machine-readable multimodal leaderboard data
+        res = self.evaluator.evaluate_role(Role.MULTIMODAL, challenger, [])
+        self.assertEqual(res.capability, CapabilityVerdict.INSUFFICIENT_EVIDENCE)
+        self.assertEqual(res.replace, ReplaceVerdict.NO)
+
     def test_all_seven_roles_produce_legal_verdicts(self):
-        """Test #6: 七个角色都能产生合法 verdict"""
+        """七个角色都能产生合法 verdict"""
         challenger = ModelMetadata(canonical_id="challenger-x", display_name="Challenger X", provider="Org")
         legal_caps = {v.value for v in CapabilityVerdict}
         legal_reps = {v.value for v in ReplaceVerdict}
@@ -70,7 +77,6 @@ class TestEvaluator(unittest.TestCase):
 
         res = self.evaluator.evaluate_role(Role.CODER, challenger, evidence)
         self.assertEqual(res.capability, CapabilityVerdict.CLEARLY_BETTER)
-        # Replaces should be NO due to harness uncertainty
         self.assertEqual(res.replace, ReplaceVerdict.NO)
 
     def test_marginal_superiority_does_not_trigger_replacement(self):

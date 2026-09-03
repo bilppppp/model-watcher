@@ -40,10 +40,31 @@ def run_watcher(
 
     # 2. Read state
     state = load_state(state_path)
+    is_bootstrap = (len(state.models) == 0 and state.last_run is None)
 
     # 3. Discover candidates & check structured data sources
     aggregator = ModelAggregator()
-    pending = aggregator.get_pending_models(state, force_model=target_model)
+
+    # Handle bootstrap when no specific model is targeted
+    if is_bootstrap and not target_model:
+        aggregator.get_pending_models(state, is_bootstrap=True)
+        if not dry_run:
+            save_state(state, state_path)
+        print(
+            f"[BOOTSTRAP] Initialized discovery state: recorded {len(state.models)} historical models as baseline. "
+            f"0 unsolicited reports generated."
+        )
+        return 0
+
+    pending = aggregator.get_pending_models(
+        state,
+        force_model=target_model,
+        is_bootstrap=False,
+    )
+
+    # Save state if any unconfirmed models were marked as SEEN during discovery
+    if not dry_run:
+        save_state(state, state_path)
 
     if not pending:
         if not quiet_on_empty:
@@ -89,6 +110,7 @@ def run_watcher(
                 provider=challenger.provider,
                 report_ref=str(report_path),
                 release_date=challenger.release_date,
+                release_confirmed=challenger.release_confirmed,
                 evidence_hash=ev_hash,
             )
             save_state(state, state_path)
@@ -117,8 +139,15 @@ def print_status(profile_path: Path, state_path: Path) -> None:
         print(f"\nState: {state_path}")
         print(f"  Last Run: {state.last_run or 'Never'}")
         print(f"  Tracked Models ({len(state.models)}):")
-        for m in state.models.values():
-            print(f"    - {m.canonical_id} [{m.status}] evaluated {m.evaluated_at[:10]} (re-evals: {m.re_eval_count})")
+        seen_count = sum(1 for m in state.models.values() if m.status == "SEEN")
+        provisional_count = sum(1 for m in state.models.values() if m.status == "PROVISIONAL")
+        mature_count = sum(1 for m in state.models.values() if m.status == "MATURE")
+        print(f"  Summary: {seen_count} historical/SEEN, {provisional_count} PROVISIONAL, {mature_count} MATURE")
+        for m in list(state.models.values())[:10]:
+            rel_info = f"rel: {m.release_date}" if m.release_date else "rel: unconfirmed"
+            print(f"    - {m.canonical_id} [{m.status}] ({rel_info})")
+        if len(state.models) > 10:
+            print(f"    ... and {len(state.models) - 10} more models.")
     else:
         print(f"\nState: {state_path} (Empty/New)")
 
@@ -129,22 +158,19 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    # run command (default)
     run_parser = subparsers.add_parser("run", help="Run model check and evaluation cycle")
     run_parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH, help="Path to profile.yaml")
     run_parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH, help="Path to state.json")
     run_parser.add_argument("--reports", type=Path, default=Path("reports"), help="Directory for reports")
     run_parser.add_argument("--model", type=str, default=None, help="Target specific model ID to evaluate")
     run_parser.add_argument("--dry-run", action="store_true", help="Do not update state.json")
-    run_parser.add_argument("--force", action="store_true", help="Force re-evaluation even if mature")
+    run_parser.add_argument("--force", action="store_true", help="Force re-evaluation even if mature/seen")
     run_parser.add_argument("--verbose", action="store_true", help="Verbose output even if no new models")
 
-    # init command
     init_parser = subparsers.add_parser("init", help="Initialize user baseline profile")
     init_parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH, help="Path to profile.yaml")
     init_parser.add_argument("--defaults", action="store_true", help="Use default example values")
 
-    # status command
     status_parser = subparsers.add_parser("status", help="Show current profile and state status")
     status_parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH, help="Path to profile.yaml")
     status_parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH, help="Path to state.json")
@@ -157,7 +183,6 @@ def main():
     elif cmd == "status":
         print_status(args.profile, args.state)
     elif cmd == "run":
-        # Handle arguments
         prof = getattr(args, "profile", DEFAULT_PROFILE_PATH)
         st = getattr(args, "state", DEFAULT_STATE_PATH)
         rep = getattr(args, "reports", Path("reports"))

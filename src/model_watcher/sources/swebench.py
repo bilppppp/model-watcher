@@ -50,7 +50,9 @@ class SWEBenchSource(DataSource):
             model_display = r.get("model_display") or r.get("name", "")
             model_org = r.get("model_org", "Unknown")
             resolved = r.get("resolved")
-            date = r.get("date")
+            # In SWE-bench schema: 'model_release_date' is actual model release; 'date' is benchmark submission date
+            model_rel_date = r.get("model_release_date")
+            submission_date = r.get("date")
 
             canon = _normalize_name(model_display)
             if not canon:
@@ -61,9 +63,11 @@ class SWEBenchSource(DataSource):
                     canonical_id=model_display.lower().replace(" ", "-"),
                     display_name=model_display,
                     provider=model_org,
-                    release_date=date,
+                    release_date=model_rel_date,
+                    release_confirmed=bool(model_rel_date),
+                    benchmark_first_seen=submission_date or "",
                     headline_indices={"swe_bench_verified": resolved},
-                    first_seen=date or "",
+                    first_seen=submission_date or "",
                     raw_source=self.name,
                 )
         return list(discovered.values())

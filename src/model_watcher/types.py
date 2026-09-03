@@ -41,9 +41,9 @@ class ReplaceVerdict(str, Enum):
 
 
 class ModelLifecycleStatus(str, Enum):
-    NEW = "NEW"
-    PROVISIONAL = "PROVISIONAL"
-    MATURE = "MATURE"
+    SEEN = "SEEN"                    # Historical baseline or unconfirmed entry; not newly released
+    PROVISIONAL = "PROVISIONAL"      # Newly released challenger; initial provisional evaluation completed
+    MATURE = "MATURE"                # Re-evaluated ~7 days later or established incumbent
 
 
 @dataclass
@@ -92,6 +92,8 @@ class ModelMetadata:
     display_name: str
     provider: str
     release_date: Optional[str] = None
+    release_confirmed: bool = False
+    benchmark_first_seen: str = ""
     input_price_per_m: Optional[float] = None
     output_price_per_m: Optional[float] = None
     output_tokens_per_sec: Optional[float] = None

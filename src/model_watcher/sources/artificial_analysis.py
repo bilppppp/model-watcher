@@ -62,6 +62,8 @@ class ArtificialAnalysisSource(DataSource):
                 display_name=name,
                 provider=creator,
                 release_date=rel_date,
+                release_confirmed=bool(rel_date),
+                benchmark_first_seen=rel_date or "",
                 input_price_per_m=pricing.get("price_1m_input_tokens"),
                 output_price_per_m=pricing.get("price_1m_output_tokens"),
                 output_tokens_per_sec=perf.get("median_output_tokens_per_second"),
@@ -95,7 +97,6 @@ class ArtificialAnalysisSource(DataSource):
         incumbent: str,
         role: Role,
     ) -> Optional[BenchmarkEvidence]:
-        # Do not extrapolate general intelligence to specific roles
         metric_key = None
         bench_name = None
         if role == Role.CODER:
@@ -108,7 +109,6 @@ class ArtificialAnalysisSource(DataSource):
             metric_key = "artificial_analysis_intelligence_index"
             bench_name = "Artificial Analysis Intelligence Index"
         else:
-            # Planner, Reviewer, Multimodal, Analyst not directly measured here
             return None
 
         c_item = self._find_model(challenger)

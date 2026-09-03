@@ -1,4 +1,4 @@
-"""Tests for state persistence, lifecycle and deduplication."""
+"""Tests for state persistence, lifecycle, bootstrap, and release date separation."""
 from datetime import datetime, timezone, timedelta
 import json
 import tempfile
@@ -7,7 +7,9 @@ from pathlib import Path
 
 from model_watcher.state import (
     WatcherState,
+    is_recent_date,
     load_state,
+    parse_date,
     save_state,
 )
 from model_watcher.types import ModelLifecycleStatus
@@ -21,29 +23,35 @@ class TestState(unittest.TestCase):
     def tearDown(self):
         self.tmp_dir.cleanup()
 
-    def test_new_model_needs_evaluation(self):
-        """New models must be evaluated immediately."""
+    def test_bootstrap_records_models_as_seen_without_evaluation(self):
+        """Test Issue #1: 首次建立 discovery state 时，把已有模型记录为已知/SEEN，不当成新发布"""
         state = WatcherState()
-        self.assertTrue(state.should_evaluate("gpt-5.5"))
+        rec = state.record_seen("claude-3-7-sonnet", "Claude 3.7 Sonnet", "Anthropic", release_date="2025-02-24", release_confirmed=True)
 
-    def test_state_avoids_duplicate_evaluation(self):
-        """Test #3 & #9: state 能避免重复评估；第二次运行不会重复处理同一个模型"""
+        self.assertEqual(rec.status, ModelLifecycleStatus.SEEN.value)
+        self.assertIsNone(rec.evaluated_at)
+        self.assertIsNone(rec.report_ref)
+        # It must NOT qualify for automatic evaluation
+        self.assertFalse(state.should_evaluate("claude-3-7-sonnet", release_date="2025-02-24", release_confirmed=True))
+
+    def test_distinguish_benchmark_entry_and_release_date(self):
+        """Test Issue #3: 分离 'benchmark 新 entry' 和 '新模型发布'"""
         state = WatcherState()
-        state.record_evaluation(
-            canonical_id="gpt-5.5",
-            display_name="GPT-5.5",
-            provider="OpenAI",
-            report_ref="reports/2026-09-03_gpt-5.5.md",
-        )
-        save_state(state, self.state_path)
 
-        # Reload from disk
-        reloaded = load_state(self.state_path)
-        self.assertIn("gpt-5.5", reloaded.models)
-        self.assertEqual(reloaded.models["gpt-5.5"].status, ModelLifecycleStatus.PROVISIONAL.value)
+        # Case A: Old model appearing in benchmark for the first time
+        # Release date was 180 days ago
+        old_release = (datetime.now(timezone.utc) - timedelta(days=180)).strftime("%Y-%m-%d")
+        should_eval_old = state.should_evaluate("old-model-v1", release_date=old_release, release_confirmed=True)
+        self.assertFalse(should_eval_old, "Old model newly added to benchmark must not be evaluated as new release")
 
-        # Immediate next run: should NOT evaluate
-        self.assertFalse(reloaded.should_evaluate("gpt-5.5"))
+        # Case B: Model with unconfirmed release date
+        should_eval_unconfirmed = state.should_evaluate("unconfirmed-model", release_date=None, release_confirmed=False)
+        self.assertFalse(should_eval_unconfirmed, "Unconfirmed release date must not trigger unsolicited alert")
+
+        # Case C: Genuine recent release (e.g. released 10 days ago)
+        recent_release = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+        should_eval_recent = state.should_evaluate("fresh-frontier-model", release_date=recent_release, release_confirmed=True)
+        self.assertTrue(should_eval_recent, "Confirmed recent release must trigger evaluation")
 
     def test_provisional_re_eval_after_7_days(self):
         """Provisional model allows one mature review ~7 days later."""
@@ -53,13 +61,15 @@ class TestState(unittest.TestCase):
             display_name="GPT-5.5",
             provider="OpenAI",
             report_ref="reports/2026-08-25_gpt-5.5.md",
+            release_date="2026-08-20",
+            release_confirmed=True,
         )
-        # Simulate 8 days elapsed
+        # Simulate 8 days elapsed since evaluation
         eight_days_ago = datetime.now(timezone.utc) - timedelta(days=8)
-        state.models["gpt-5.5"].first_seen = eight_days_ago.isoformat()
+        state.models["gpt-5.5"].evaluated_at = eight_days_ago.isoformat()
 
         # Should be eligible for re-evaluation
-        self.assertTrue(state.should_evaluate("gpt-5.5"))
+        self.assertTrue(state.should_evaluate("gpt-5.5", release_date="2026-08-20", release_confirmed=True))
 
         # After re-evaluation, transitions to MATURE
         state.record_evaluation(
@@ -67,23 +77,24 @@ class TestState(unittest.TestCase):
             display_name="GPT-5.5",
             provider="OpenAI",
             report_ref="reports/2026-09-03_gpt-5.5.md",
+            release_date="2026-08-20",
+            release_confirmed=True,
         )
         self.assertEqual(state.models["gpt-5.5"].status, ModelLifecycleStatus.MATURE.value)
 
-        # Even 30 days later, MATURE model is NOT re-evaluated
-        self.assertFalse(state.should_evaluate("gpt-5.5"))
+        # Even later, MATURE model is NOT re-evaluated
+        self.assertFalse(state.should_evaluate("gpt-5.5", release_date="2026-08-20", release_confirmed=True))
 
     def test_atomic_write_and_corruption_safety(self):
-        """Test #11: 网络/API 异常时不会损坏 profile/state"""
+        """Network/API error or corrupted file does not crash state loading."""
         state = WatcherState()
-        state.record_evaluation("test-model", "Test Model", "Provider", "reports/ref.md")
+        state.record_seen("test-model", "Test Model", "Provider")
         save_state(state, self.state_path)
 
         # Corrupt file deliberately
         with open(self.state_path, "w", encoding="utf-8") as f:
             f.write("{ invalid json")
 
-        # Loading should not crash; creates backup and recovers
         recovered = load_state(self.state_path)
         self.assertIsInstance(recovered, WatcherState)
         backup = self.state_path.with_suffix(".corrupted.bak")

@@ -1,19 +1,19 @@
 """Model discovery and evidence aggregation across structured data sources."""
+import datetime
 import logging
 import re
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from model_watcher.sources.artificial_analysis import ArtificialAnalysisSource
 from model_watcher.sources.harbor import HarborSource
 from model_watcher.sources.livebench import LiveBenchSource
 from model_watcher.sources.lmms_eval import LMMsEvalSource
 from model_watcher.sources.swebench import SWEBenchSource
-from model_watcher.state import WatcherState
+from model_watcher.state import WatcherState, is_recent_date
 from model_watcher.types import BenchmarkEvidence, ModelMetadata, Role
 
 logger = logging.getLogger(__name__)
 
-# Patterns to filter out models outside of tracking scope
 OUT_OF_SCOPE_PATTERNS = [
     r"embed",
     r"embedding",
@@ -75,10 +75,15 @@ class ModelAggregator:
                     if canon_key not in all_models:
                         all_models[canon_key] = m
                     else:
-                        # Merge metadata
                         existing = all_models[canon_key]
-                        if not existing.release_date and m.release_date:
+                        # Prefer confirmed release date from trusted discovery source
+                        if not existing.release_confirmed and m.release_confirmed:
                             existing.release_date = m.release_date
+                            existing.release_confirmed = m.release_confirmed
+                        elif not existing.release_date and m.release_date:
+                            existing.release_date = m.release_date
+                            existing.release_confirmed = m.release_confirmed
+
                         if not existing.input_price_per_m and m.input_price_per_m:
                             existing.input_price_per_m = m.input_price_per_m
                         if not existing.output_price_per_m and m.output_price_per_m:
@@ -91,12 +96,34 @@ class ModelAggregator:
 
         return list(all_models.values())
 
-    def get_pending_models(self, state: WatcherState, force_model: Optional[str] = None) -> List[ModelMetadata]:
-        """Finds models needing evaluation on this run."""
+    def get_pending_models(
+        self,
+        state: WatcherState,
+        force_model: Optional[str] = None,
+        is_bootstrap: bool = False,
+    ) -> List[ModelMetadata]:
+        """Finds candidate models that qualify for evaluation.
+
+        - If is_bootstrap: records all current candidates into state as baseline SEEN; returns []
+        - If force_model: returns specifically targeted model for user-requested evaluation
+        - Otherwise: separates 'new benchmark entry' from 'new model release' using release confirmation.
+        """
         candidates = self.discover_all_candidates()
 
+        if is_bootstrap:
+            # Bootstrap: record all current historical models as SEEN
+            for m in candidates:
+                state.record_seen(
+                    canonical_id=m.canonical_id,
+                    display_name=m.display_name,
+                    provider=m.provider,
+                    release_date=m.release_date,
+                    release_confirmed=m.release_confirmed,
+                )
+            return []
+
         if force_model:
-            # Explicit model target requested
+            # Explicit user evaluation request
             norm_target = re.sub(r"[^a-z0-9]", "", force_model.lower())
             matched = [
                 m for m in candidates
@@ -110,16 +137,31 @@ class ModelAggregator:
                 ModelMetadata(
                     canonical_id=force_model,
                     display_name=force_model,
-                    provider="Frontier Provider",
+                    provider="Targeted Model",
                     first_seen="2026-09-03",
+                    release_confirmed=True,
                     raw_source="Targeted Evaluation",
                 )
             ]
 
         pending = []
         for m in candidates:
-            if state.should_evaluate(m.canonical_id):
+            if state.should_evaluate(
+                canonical_id=m.canonical_id,
+                release_date=m.release_date,
+                release_confirmed=m.release_confirmed,
+            ):
                 pending.append(m)
+            elif m.canonical_id not in state.models:
+                # Benchmark entry without confirmed recent release date:
+                # Record as SEEN to avoid re-checking, but do NOT alert user
+                state.record_seen(
+                    canonical_id=m.canonical_id,
+                    display_name=m.display_name,
+                    provider=m.provider,
+                    release_date=m.release_date,
+                    release_confirmed=m.release_confirmed,
+                )
 
         return pending
 
