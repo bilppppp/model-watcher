@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,24 @@ from model_watcher.types import Role
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("model_watcher")
+
+def load_dotenv_if_exists(dotenv_path: Path = Path(".env")) -> None:
+    if dotenv_path.exists():
+        try:
+            with open(dotenv_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'").strip('"')
+                        if k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+load_dotenv_if_exists()
+
 
 
 def run_watcher(

@@ -2,6 +2,13 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+if [ -f "$DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$DIR/.env"
+    set +a
+fi
+
 if [ -f "$DIR/.venv/bin/python" ]; then
     PYTHON="$DIR/.venv/bin/python"
 elif command -v uv >/dev/null 2>&1; then
