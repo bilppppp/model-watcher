@@ -4,6 +4,8 @@
 > 
 > Continuous evaluation of newly released mainstream AI models to decide whether they alter the user's active 7-role workflow routing against existing incumbents.
 
+[**中文文档 (Chinese)**](README_CN.md) | [**AI Agent Integration Guide (OpenClaw / Hermes)**](README_AGENT.md)
+
 ---
 
 ## What Model Watcher Does
