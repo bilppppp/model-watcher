@@ -40,7 +40,7 @@ class TestEvaluator(unittest.TestCase):
         res = self.evaluator.evaluate_role(Role.REVIEWER, challenger, non_review_evidence)
         self.assertEqual(res.capability, CapabilityVerdict.INSUFFICIENT_EVIDENCE)
         self.assertEqual(res.replace, ReplaceVerdict.NO)
-        self.assertIn("Reviewer requires strict direct evidence", res.replace_rationale)
+        self.assertIn("审查角色要求严格直接的代码审查与缺陷挖掘证据", res.replace_rationale)
 
     def test_multimodal_audit_missing_evidence(self):
         """Test Issue #2: Multimodal 在缺乏可靠结构化结果时必须返回 ? Insufficient evidence"""

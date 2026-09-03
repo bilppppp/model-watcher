@@ -42,7 +42,7 @@ class ModelEvaluator:
                     challenger_model=challenger_name,
                     capability=CapabilityVerdict.INSUFFICIENT_EVIDENCE,
                     replace=ReplaceVerdict.NO,
-                    replace_rationale="No direct code-review or adversarial bug-finding benchmark evidence. Reviewer requires strict direct evidence; retaining incumbent.",
+                    replace_rationale="审查角色要求严格直接的代码审查与缺陷挖掘证据，暂无直接测试数据，继续保留当前模型。",
                     primary_evidence=None,
                     all_evidence=[],
                 )
@@ -54,7 +54,7 @@ class ModelEvaluator:
                 challenger_model=challenger_name,
                 capability=CapabilityVerdict.INSUFFICIENT_EVIDENCE,
                 replace=ReplaceVerdict.NO,
-                replace_rationale="No verifiable comparative benchmark evidence available for this role; retaining incumbent.",
+                replace_rationale="该角色暂无可验证的直接对比基准证据，继续保留当前模型。",
                 primary_evidence=None,
                 all_evidence=[],
             )
@@ -69,17 +69,17 @@ class ModelEvaluator:
         if c_score is None:
             capability = CapabilityVerdict.INSUFFICIENT_EVIDENCE
             replace = ReplaceVerdict.NO
-            rationale = "Benchmark score unavailable for challenger; retaining incumbent."
+            rationale = "候选模型缺少该基准测试得分，继续保留当前模型。"
         elif i_score is None:
             # Only challenger score is known
             if c_score >= 80.0:
                 capability = CapabilityVerdict.PROBABLY_BETTER
                 replace = ReplaceVerdict.NO
-                rationale = f"Challenger achieved strong score ({c_score}{primary_ev.display_metric}), but incumbent baseline score is unverified on same benchmark."
+                rationale = f"候选模型取得高分（{c_score}{primary_ev.display_metric}），但当前主力模型在相同基准上暂无确证对比分。"
             else:
                 capability = CapabilityVerdict.NO_ADVANTAGE
                 replace = ReplaceVerdict.NO
-                rationale = "Challenger score is moderate without direct incumbent head-to-head comparison."
+                rationale = "候选模型表现一般，且暂无与当前主力的直接同测对比。"
         else:
             delta = c_score - i_score
             # Relative thresholding
@@ -124,28 +124,28 @@ class ModelEvaluator:
     ) -> Tuple[ReplaceVerdict, str]:
         # 1. If worse or no advantage, never replace primary
         if capability in (CapabilityVerdict.PROBABLY_WORSE, CapabilityVerdict.NO_ADVANTAGE, CapabilityVerdict.INSUFFICIENT_EVIDENCE):
-            return ReplaceVerdict.NO, f"Challenger shows no meaningful capability edge over {incumbent_name} (delta: {delta:+.1f}{primary_ev.display_metric})."
+            return ReplaceVerdict.NO, f"候选模型未展现出超越 {incumbent_name} 的明显能力优势（分差：{delta:+.1f}{primary_ev.display_metric}）。"
 
         # 2. If only marginal advantage (1.5 <= delta < 5.0), default NO
         if capability == CapabilityVerdict.PROBABLY_BETTER:
             if primary_ev.known_uncertainty and "harness" in primary_ev.known_uncertainty.lower():
-                return ReplaceVerdict.NO, f"Advantage of +{delta:.1f}{primary_ev.display_metric} may be artifact of test harness ({primary_ev.known_uncertainty}). Not worth switching risk."
-            return ReplaceVerdict.NO, f"Marginal lead (+{delta:.1f}{primary_ev.display_metric}) is insufficient to justify migration and switching overhead."
+                return ReplaceVerdict.NO, f"领先优势（+{delta:.1f}{primary_ev.display_metric}）可能是测试环境（{primary_ev.known_uncertainty}）带来的偏差，不值得冒切换风险。"
+            return ReplaceVerdict.NO, f"候选模型仅小幅领先（+{delta:.1f}{primary_ev.display_metric}），不足以抵消迁移成本和切换风险。"
 
         # 3. If clearly better (delta >= 5.0)
         if capability == CapabilityVerdict.CLEARLY_BETTER:
             # Check harness comparability
             if primary_ev.known_uncertainty and "harness" in primary_ev.known_uncertainty.lower():
-                return ReplaceVerdict.NO, f"Substantial lead (+{delta:.1f}{primary_ev.display_metric}) observed, but harness incompatibility detected ({primary_ev.known_uncertainty}). Await verified apples-to-apples run before replacing {incumbent_name}."
+                return ReplaceVerdict.NO, f"观察到明显领先（+{delta:.1f}{primary_ev.display_metric}），但存在测试环境不兼容（{primary_ev.known_uncertainty}），在获得同环境对比前暂不替换 {incumbent_name}。"
 
             # Check accessibility constraint
             accessible = self.profile.is_accessible(challenger.canonical_id) or self.profile.is_accessible(challenger.display_name)
             if not accessible:
-                return ReplaceVerdict.NO, f"Model exhibits superior performance (+{delta:.1f}{primary_ev.display_metric}), but is not currently accessible in user subscription profile."
+                return ReplaceVerdict.NO, f"候选模型表现出色（+{delta:.1f}{primary_ev.display_metric}），但在用户当前订阅/配置中不可直接使用。"
 
-            return ReplaceVerdict.YES, f"Clear and verified capability advantage (+{delta:.1f}{primary_ev.display_metric} on {primary_ev.benchmark}) justifies route migration."
+            return ReplaceVerdict.YES, f"在 {primary_ev.benchmark} 上具备经确证的明显能力优势（+{delta:.1f}{primary_ev.display_metric}），建议进行路由迁移。"
 
-        return ReplaceVerdict.NO, "Default conservative retention of established incumbent."
+        return ReplaceVerdict.NO, "依据谨慎原则，继续保留当前主力模型。"
 
     def build_report(
         self,
@@ -180,25 +180,25 @@ class ModelEvaluator:
                 evidence_ledger.append(ev.primary_evidence)
 
             if ev.replace == ReplaceVerdict.YES:
-                suggested_adjustments.append(f"{role.display_name}: {ev.incumbent_model} → {ev.challenger_model}")
+                suggested_adjustments.append(f"{role.display_name}：{ev.incumbent_model} → {ev.challenger_model}")
             else:
-                kept_incumbents.append(f"{role.display_name}: Retain {ev.incumbent_model} ({ev.replace_rationale})")
+                kept_incumbents.append(f"{role.display_name}：保留 {ev.incumbent_model}（{ev.replace_rationale}）")
 
         # Check for new specialist / worker use cases
         if challenger.input_price_per_m is not None and challenger.input_price_per_m <= 0.8:
-            new_use_cases.append(f"Cheap background worker / subagent (${challenger.input_price_per_m}/1M input tokens)")
+            new_use_cases.append(f"极低成本后台执行工 / Subagent（${challenger.input_price_per_m}/1M 输入 Tokens）")
         if role_evaluations.get(Role.CODER) and role_evaluations[Role.CODER].capability in (CapabilityVerdict.CLEARLY_BETTER, CapabilityVerdict.PROBABLY_BETTER):
-            new_use_cases.append("Specialist builder for high-difficulty coding issues")
+            new_use_cases.append("针对高难代码难题的专有构建模型")
         if role_evaluations.get(Role.MULTIMODAL) and role_evaluations[Role.MULTIMODAL].capability in (CapabilityVerdict.CLEARLY_BETTER, CapabilityVerdict.PROBABLY_BETTER):
-            new_use_cases.append("Multimodal document & chart analysis specialist")
+            new_use_cases.append("多模态文档与图表分析专有模型")
 
         # Key takeaway
         if routes_changed > 0:
-            key_takeaway = f"Upgrades {routes_changed}/{total_routes} active roles, led by {suggested_adjustments[0]}."
+            key_takeaway = f"建议升级 {routes_changed}/{total_routes} 个核心角色路由，以 {suggested_adjustments[0]} 为首。"
         elif overall_verdict == "值得关注":
-            key_takeaway = "Shows frontier capabilities or attractive pricing, but lacks sufficient verified margin to replace active primary routes."
+            key_takeaway = "展现出前沿能力或极具吸引力的定价，但尚缺乏经确证的足够领先优势来替换当前主力。"
         else:
-            key_takeaway = "Finished evaluation: no dimension sufficiently alters current model routing; safe to ignore this release."
+            key_takeaway = "评估完成：没有任何维度足以改变当前模型路由组合，可以安全忽略本次发布。"
 
         return EvaluationReport(
             model=challenger,

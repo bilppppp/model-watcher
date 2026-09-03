@@ -15,6 +15,15 @@ Every challenger is evaluated head-to-head against the user's actual **calibrate
 
 ---
 
+## Default Language Policy (Simplified Chinese)
+
+All reports produced by Model Watcher (Markdown reports, tables, headers, rationales, takeaways, and cross-model summaries) natively output **Simplified Chinese** (`zh-CN`) by default.
+- Agents interacting with the user MUST present these reports in Simplified Chinese directly as generated.
+- Only when the user explicitly requests another language (e.g., English) should the Agent convert the report at the presentation layer.
+- Technical benchmarks, model IDs, source names, harness names, URLs, and metric units remain in their original canonical forms without translation.
+
+---
+
 ## Natural Language Intent Mapping
 
 When the user gives instructions to the Agent:

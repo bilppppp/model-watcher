@@ -8,8 +8,41 @@ from model_watcher.types import (
     CapabilityVerdict,
     EvaluationReport,
     ReleaseEvidenceLevel,
+    ReplaceVerdict,
     Role,
 )
+
+CAPABILITY_CN_MAP = {
+    CapabilityVerdict.CLEARLY_BETTER: "↑ 明显更强",
+    CapabilityVerdict.PROBABLY_BETTER: "↗ 大概率更强",
+    CapabilityVerdict.NO_ADVANTAGE: "= 无显著优势",
+    CapabilityVerdict.PROBABLY_WORSE: "↘ 大概率更弱",
+    CapabilityVerdict.INSUFFICIENT_EVIDENCE: "? 证据不足",
+}
+
+REPLACE_CN_MAP = {
+    ReplaceVerdict.YES: "是",
+    ReplaceVerdict.NO: "否",
+}
+
+
+def get_capability_cn(cap) -> str:
+    if isinstance(cap, CapabilityVerdict):
+        return CAPABILITY_CN_MAP.get(cap, cap.value)
+    for k, v in CAPABILITY_CN_MAP.items():
+        if k.value == cap or v == cap:
+            return v
+    return str(cap)
+
+
+def get_replace_cn(rep) -> str:
+    if isinstance(rep, ReplaceVerdict):
+        return REPLACE_CN_MAP.get(rep, rep.value)
+    if rep in ("Yes", "yes", True):
+        return "是"
+    if rep in ("No", "no", False):
+        return "否"
+    return str(rep)
 
 
 class MarkdownReporter:
@@ -26,7 +59,7 @@ class MarkdownReporter:
         lines.append(f"**本次改变：{report.routes_changed}/{report.total_routes} 个当前模型路由**")
 
         # Provenance and Calibration lines
-        lines.append(f"**Baseline Calibration:** Revision {report.baseline_revision} ({report.baseline_calibrated_at or 'Initial'})")
+        lines.append(f"**当前校准基线：** Revision {report.baseline_revision}（{report.baseline_calibrated_at or 'Initial'}）")
         if report.model.release_evidence_level == ReleaseEvidenceLevel.INFERRED.value:
             lines.append(f"**发布日期：** {report.model.release_date or '未知'} *(INFERRED: 推断自厂商标准模型版本标识，非官方直接确证)*")
         elif report.model.release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
@@ -41,18 +74,18 @@ class MarkdownReporter:
             lines.append("> 已完成评估，没有任何维度足以改变当前模型组合，可以忽略这次发布。\n")
 
         # 2. 7-role Comparison Table
-        lines.append("| Role | Current | Challenger | Capability | Replace? |")
+        lines.append("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |")
         lines.append("|---|---|---|---|---|")
         for role in Role:
             reval = report.role_evaluations.get(role)
             if reval:
-                cap_val = reval.capability.value
-                rep_val = reval.replace.value
+                cap_val = get_capability_cn(reval.capability)
+                rep_val = get_replace_cn(reval.replace)
                 inc_val = reval.incumbent_model
             else:
-                cap_val = CapabilityVerdict.INSUFFICIENT_EVIDENCE.value
-                rep_val = "No"
-                inc_val = "Unknown"
+                cap_val = CAPABILITY_CN_MAP[CapabilityVerdict.INSUFFICIENT_EVIDENCE]
+                rep_val = REPLACE_CN_MAP[ReplaceVerdict.NO]
+                inc_val = "未知"
 
             lines.append(f"| {role.display_name} | {inc_val} | {report.model.display_name} | {cap_val} | {rep_val} |")
         lines.append("")
@@ -128,16 +161,16 @@ class MarkdownReporter:
         reports: list,
     ) -> str:
         """Generates a cross-model summary table:
-        | Role | Current | Model A | Model B | Model C | Recommendation |
+        | 角色 | 当前模型 | Model A | Model B | Model C | 建议 |
         """
         lines = []
-        lines.append("# 📊 Cross-Model Comparison Summary\n")
+        lines.append("# 📊 多模型比较总结\n")
         if reports:
             first = reports[0]
-            lines.append(f"**Baseline Calibration:** Revision {first.baseline_revision} ({first.baseline_calibrated_at or 'Initial'})\n")
+            lines.append(f"**当前校准基线：** Revision {first.baseline_revision}（{first.baseline_calibrated_at or 'Initial'}）\n")
 
         model_headers = [r.model.display_name for r in reports]
-        header_row = "| Role | Current | " + " | ".join(model_headers) + " | Recommendation |"
+        header_row = "| 角色 | 当前模型 | " + " | ".join(model_headers) + " | 建议 |"
         sep_row = "|---|---|" + "|".join(["---"] * len(reports)) + "|---|"
         lines.append(header_row)
         lines.append(sep_row)
@@ -149,9 +182,9 @@ class MarkdownReporter:
             for r in reports:
                 ev = r.role_evaluations.get(role)
                 if ev:
-                    row_items.append(ev.capability.value)
+                    row_items.append(get_capability_cn(ev.capability))
                 else:
-                    row_items.append("? Insufficient evidence")
+                    row_items.append(CAPABILITY_CN_MAP[CapabilityVerdict.INSUFFICIENT_EVIDENCE])
 
             rec = self.resolve_role_cross_recommendation(role, current_incumbent, reports)
             row_items.append(rec)
@@ -171,10 +204,10 @@ class MarkdownReporter:
         Rules:
         1. Identifies challengers that warrant replacement (replace == ReplaceVerdict.YES).
         2. If 0 replace challengers:
-           - If any candidate is CLEARLY_BETTER or PROBABLY_BETTER: Retain current (Leads not worth switching).
-           - Otherwise: Retain current.
+           - If any candidate is CLEARLY_BETTER or PROBABLY_BETTER: 保留 {current_incumbent}（微弱领先不建议切换）.
+           - Otherwise: 保留 {current_incumbent}.
         3. If exactly 1 replace challenger:
-           - Recommend that challenger: **{challenger}** (Replace: Yes).
+           - Recommend that challenger: **{challenger}**（建议替换）.
         4. If multiple replace challengers:
            - Find common benchmark evidence across ALL of them with:
              - same source, benchmark name, version, metric
@@ -182,10 +215,10 @@ class MarkdownReporter:
              - challenger score present
            - If directly comparable common benchmark evidence exists:
              - Sort candidates deterministically by score descending, then display_name ascending.
-             - If clear top score: **{top_model}** ({top_score:.1f}{metric} on {benchmark})
-             - If tie: Tie: {Model A} / {Model B} ({score:.1f}{metric} on {benchmark})
+             - If clear top score: **{top_model}**（在 {benchmark} 上取得最高分 {top_score:.1f}{metric}）
+             - If tie: 并列：{Model A} / {Model B}（在 {benchmark} 上同得 {score:.1f}{metric}）
            - If no directly comparable common benchmark evidence exists across all replace challengers:
-             - Output: "{Model A} / {Model B} all outperform current incumbent; insufficient comparable evidence to rank them reliably."
+             - Output: "{Model A} / {Model B} 均优于当前模型；但缺乏足够的直接可比证据，无法可靠排序。"
         5. Completely order-invariant: compare A B C and compare C B A yield identical conclusions.
         """
         from model_watcher.types import CapabilityVerdict, ReplaceVerdict
@@ -202,11 +235,11 @@ class MarkdownReporter:
                 and r.role_evaluations[role].capability in (CapabilityVerdict.CLEARLY_BETTER, CapabilityVerdict.PROBABLY_BETTER)
             ]
             if better_candidates:
-                return f"Retain {current_incumbent} (Leads not worth switching)"
-            return f"Retain {current_incumbent}"
+                return f"保留 {current_incumbent}（微弱领先不建议切换）"
+            return f"保留 {current_incumbent}"
 
         if len(replace_yes_reports) == 1:
-            return f"**{replace_yes_reports[0].model.display_name}** (Replace: Yes)"
+            return f"**{replace_yes_reports[0].model.display_name}**（建议替换）"
 
         # Multiple replace challengers: find common comparable benchmarks
         candidate_ev_maps = {}
@@ -257,13 +290,13 @@ class MarkdownReporter:
             metric_str = metric if metric else ""
             if len(tied) > 1:
                 tied.sort()
-                return f"Tie: {' / '.join(tied)} ({top_score:.1f}{metric_str} on {benchmark})"
+                return f"并列：{' / '.join(tied)}（在 {benchmark} 上同得 {top_score:.1f}{metric_str}）"
             else:
-                return f"**{top_name}** ({top_score:.1f}{metric_str} on {benchmark})"
+                return f"**{top_name}**（在 {benchmark} 上取得最高分 {top_score:.1f}{metric_str}）"
 
         # No common benchmark among Replace: Yes candidates
         names_sorted = sorted([r.model.display_name for r in replace_yes_reports])
-        return f"{' / '.join(names_sorted)} all outperform current incumbent; insufficient comparable evidence to rank them reliably."
+        return f"{' / '.join(names_sorted)} 均优于当前模型；但缺乏足够的直接可比证据，无法可靠排序。"
 
     def save_comparison_report(self, content: str, tag: str = "comparison") -> Path:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")

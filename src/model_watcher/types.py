@@ -16,13 +16,13 @@ class Role(str, Enum):
     @property
     def display_name(self) -> str:
         names = {
-            Role.CODER: "Coder / Builder",
-            Role.PLANNER: "Planner",
-            Role.REVIEWER: "Reviewer",
-            Role.REASONER: "Reasoner",
-            Role.ANALYST: "Analyst / Researcher",
-            Role.AGENT: "Agent / Computer-use",
-            Role.MULTIMODAL: "Multimodal",
+            Role.CODER: "编码 / 构建",
+            Role.PLANNER: "规划",
+            Role.REVIEWER: "审查",
+            Role.REASONER: "推理",
+            Role.ANALYST: "分析 / 研究",
+            Role.AGENT: "Agent / 工具执行",
+            Role.MULTIMODAL: "多模态",
         }
         return names[self]
 

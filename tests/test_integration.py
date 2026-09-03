@@ -138,7 +138,7 @@ class TestIntegration(unittest.TestCase):
         self.assertGreaterEqual(len(reports), 1)
         content = reports[0].read_text()
         self.assertIn("Revision 1", content)
-        self.assertIn("| Coder / Builder |", content)
+        self.assertIn("| 编码 / 构建 |", content)
 
     def test_compare_multi_model_generates_cross_model_summary(self):
         """Test #2: compare 多模型生成 cross-model role summary 表"""
@@ -155,11 +155,11 @@ class TestIntegration(unittest.TestCase):
         summary_content = summary_reports[0].read_text()
 
         # Check cross-model summary table presence
-        self.assertIn("# 📊 Cross-Model Comparison Summary", summary_content)
-        self.assertIn("| Role | Current |", summary_content)
-        self.assertIn("| Recommendation |", summary_content)
+        self.assertIn("# 📊 多模型比较总结", summary_content)
+        self.assertIn("| 角色 | 当前模型 |", summary_content)
+        self.assertIn("| 建议 |", summary_content)
         # Check Reviewer adheres to Insufficient evidence
-        self.assertIn("| Reviewer |", summary_content)
+        self.assertIn("| 审查 |", summary_content)
 
     def test_compare_unknown_model_returns_error_without_fake_provenance(self):
         """Test #5: targeted unknown model 不再伪造 CONFIRMED release provenance，返回错误"""
@@ -210,7 +210,7 @@ class TestIntegration(unittest.TestCase):
         report_files = sorted(self.reports_dir.glob("*.md"))
         latest_report = report_files[-1].read_text()
         self.assertIn("Revision 2", latest_report)
-        self.assertIn("| Coder / Builder | gpt-4o |", latest_report)
+        self.assertIn("| 编码 / 构建 | gpt-4o |", latest_report)
 
 
 if __name__ == "__main__":

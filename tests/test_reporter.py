@@ -137,15 +137,15 @@ class TestReporter(unittest.TestCase):
         summary_bac = self.reporter.format_multi_compare_summary([rep_b, rep_a, rep_c])
 
         # Both must recommend Model B as the clear winner on LiveBench (Coding)
-        expected_rec = "**Model B** (89.0% on LiveBench (Coding))"
+        expected_rec = "**Model B**（在 LiveBench (Coding) 上取得最高分 89.0%）"
         self.assertIn(expected_rec, summary_abc)
         self.assertIn(expected_rec, summary_cba)
         self.assertIn(expected_rec, summary_bac)
 
         # Reviewer must retain claude-3-7-sonnet across all permutations
-        self.assertIn("| Reviewer | claude-3-7-sonnet |", summary_abc)
-        self.assertIn("Retain claude-3-7-sonnet", summary_abc)
-        self.assertIn("Retain claude-3-7-sonnet", summary_cba)
+        self.assertIn("| 审查 | claude-3-7-sonnet |", summary_abc)
+        self.assertIn("保留 claude-3-7-sonnet", summary_abc)
+        self.assertIn("保留 claude-3-7-sonnet", summary_cba)
 
     def test_multiple_replace_yes_without_common_benchmark_outputs_unrankable(self):
         """Test #7a: 多个 Replace Yes + 无共同可比 benchmark → 不选假 winner，输出 unrankable 提示"""
@@ -155,7 +155,7 @@ class TestReporter(unittest.TestCase):
         summary_ab = self.reporter.format_multi_compare_summary([rep_a, rep_b])
         summary_ba = self.reporter.format_multi_compare_summary([rep_b, rep_a])
 
-        expected_text = "Model A / Model B all outperform current incumbent; insufficient comparable evidence to rank them reliably."
+        expected_text = "Model A / Model B 均优于当前模型；但缺乏足够的直接可比证据，无法可靠排序。"
         self.assertIn(expected_text, summary_ab)
         self.assertIn(expected_text, summary_ba)
 
@@ -167,8 +167,8 @@ class TestReporter(unittest.TestCase):
         summary_xy = self.reporter.format_multi_compare_summary([rep_x, rep_y])
         summary_yx = self.reporter.format_multi_compare_summary([rep_y, rep_x])
 
-        self.assertIn("**Model X** (91.5% on LiveBench (Coding))", summary_xy)
-        self.assertIn("**Model X** (91.5% on LiveBench (Coding))", summary_yx)
+        self.assertIn("**Model X**（在 LiveBench (Coding) 上取得最高分 91.5%）", summary_xy)
+        self.assertIn("**Model X**（在 LiveBench (Coding) 上取得最高分 91.5%）", summary_yx)
 
     def test_multiple_replace_yes_tie_outputs_tie_sorted_alphabetically(self):
         """Test #7c: 同分 → 明确 tie，按字母升序排序，不随输入顺序变化"""
@@ -178,9 +178,63 @@ class TestReporter(unittest.TestCase):
         summary_ab = self.reporter.format_multi_compare_summary([rep_alpha, rep_beta])
         summary_ba = self.reporter.format_multi_compare_summary([rep_beta, rep_alpha])
 
-        expected_tie = "Tie: Model Alpha / Model Beta (88.0% on LiveBench (Coding))"
+        expected_tie = "并列：Model Alpha / Model Beta（在 LiveBench (Coding) 上同得 88.0%）"
         self.assertIn(expected_tie, summary_ab)
         self.assertIn(expected_tie, summary_ba)
+
+    def test_simplified_chinese_report_structure(self):
+        """Test #10: Raw generated Markdown is natively in Simplified Chinese."""
+        challenger = ModelMetadata(canonical_id="gpt-5-mini", display_name="GPT-5-Mini", provider="OpenAI")
+        ev = BenchmarkEvidence(
+            source="LiveBench",
+            benchmark="LiveBench (Coding)",
+            version="2026_06_25",
+            score_challenger=92.0,
+            score_incumbent=80.0,
+            display_metric="%",
+            harness="official public leaderboard",
+            confidence=0.88,
+        )
+        role_evals = {}
+        for r in Role:
+            role_evals[r] = RoleEvaluation(
+                role=r,
+                incumbent_model="claude-3-7-sonnet",
+                challenger_model="GPT-5-Mini",
+                capability=CapabilityVerdict.CLEARLY_BETTER if r == Role.CODER else CapabilityVerdict.INSUFFICIENT_EVIDENCE,
+                replace=ReplaceVerdict.YES if r == Role.CODER else ReplaceVerdict.NO,
+                replace_rationale="在 LiveBench (Coding) 上具备经确证的明显能力优势（+12.0%），建议进行路由迁移。" if r == Role.CODER else "该角色暂无可验证的直接对比基准证据，继续保留当前模型。",
+                primary_evidence=ev if r == Role.CODER else None,
+                all_evidence=[ev] if r == Role.CODER else [],
+            )
+
+        report = self.evaluator.build_report(challenger, role_evals)
+        md = self.reporter.format_report(report)
+
+        # 1. Chinese Table headers
+        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+        # 2. Chinese Role display names
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-5-Mini |", md)
+        self.assertIn("| 规划 |", md)
+        self.assertIn("| 审查 |", md)
+        self.assertIn("| 推理 |", md)
+        self.assertIn("| 分析 / 研究 |", md)
+        self.assertIn("| Agent / 工具执行 |", md)
+        self.assertIn("| 多模态 |", md)
+        # 3. Chinese Capability display
+        self.assertIn("↑ 明显更强", md)
+        self.assertIn("? 证据不足", md)
+        # 4. Chinese Replace display
+        self.assertIn("| 是 |", md)
+        self.assertIn("| 否 |", md)
+        # 5. Baseline Calibration
+        self.assertIn("当前校准基线：", md)
+        self.assertIn("Revision", md)
+        # 6. Untranslated technical items
+        self.assertIn("GPT-5-Mini", md)
+        self.assertIn("LiveBench", md)
+        self.assertIn("LiveBench (Coding)", md)
+        self.assertIn("official public leaderboard", md)
 
 
 if __name__ == "__main__":
