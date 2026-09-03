@@ -146,33 +146,124 @@ class MarkdownReporter:
             current_incumbent = reports[0].role_evaluations[role].incumbent_model if reports and role in reports[0].role_evaluations else "Current"
             row_items = [role.display_name, current_incumbent]
 
-            best_replace_candidate = None
-            better_candidates = []
-
             for r in reports:
                 ev = r.role_evaluations.get(role)
                 if ev:
                     row_items.append(ev.capability.value)
-                    if ev.replace.value == "Yes":
-                        best_replace_candidate = r.model.display_name
-                    elif ev.capability.value in ("↑ Clearly better", "↗ Probably better"):
-                        better_candidates.append(r.model.display_name)
                 else:
                     row_items.append("? Insufficient evidence")
 
-            # Recommendation logic: faithful to evidence, no forced ranking
-            if best_replace_candidate:
-                rec = f"**{best_replace_candidate}** (Replace: Yes)"
-            elif better_candidates:
-                rec = f"Retain {current_incumbent} (Leads not worth switching)"
-            else:
-                rec = f"Retain {current_incumbent}"
-
+            rec = self.resolve_role_cross_recommendation(role, current_incumbent, reports)
             row_items.append(rec)
             lines.append("| " + " | ".join(row_items) + " |")
 
         lines.append("")
         return "\n".join(lines)
+
+    def resolve_role_cross_recommendation(
+        self,
+        role: Role,
+        current_incumbent: str,
+        reports: list,
+    ) -> str:
+        """Computes order-invariant cross-model recommendation for a given role across challenger reports.
+
+        Rules:
+        1. Identifies challengers that warrant replacement (replace == ReplaceVerdict.YES).
+        2. If 0 replace challengers:
+           - If any candidate is CLEARLY_BETTER or PROBABLY_BETTER: Retain current (Leads not worth switching).
+           - Otherwise: Retain current.
+        3. If exactly 1 replace challenger:
+           - Recommend that challenger: **{challenger}** (Replace: Yes).
+        4. If multiple replace challengers:
+           - Find common benchmark evidence across ALL of them with:
+             - same source, benchmark name, version, metric
+             - comparable/identical harness without harness discrepancy uncertainties
+             - challenger score present
+           - If directly comparable common benchmark evidence exists:
+             - Sort candidates deterministically by score descending, then display_name ascending.
+             - If clear top score: **{top_model}** ({top_score:.1f}{metric} on {benchmark})
+             - If tie: Tie: {Model A} / {Model B} ({score:.1f}{metric} on {benchmark})
+           - If no directly comparable common benchmark evidence exists across all replace challengers:
+             - Output: "{Model A} / {Model B} all outperform current incumbent; insufficient comparable evidence to rank them reliably."
+        5. Completely order-invariant: compare A B C and compare C B A yield identical conclusions.
+        """
+        from model_watcher.types import CapabilityVerdict, ReplaceVerdict
+
+        replace_yes_reports = [
+            r for r in reports
+            if r.role_evaluations.get(role) and r.role_evaluations[role].replace == ReplaceVerdict.YES
+        ]
+
+        if not replace_yes_reports:
+            better_candidates = [
+                r for r in reports
+                if r.role_evaluations.get(role)
+                and r.role_evaluations[role].capability in (CapabilityVerdict.CLEARLY_BETTER, CapabilityVerdict.PROBABLY_BETTER)
+            ]
+            if better_candidates:
+                return f"Retain {current_incumbent} (Leads not worth switching)"
+            return f"Retain {current_incumbent}"
+
+        if len(replace_yes_reports) == 1:
+            return f"**{replace_yes_reports[0].model.display_name}** (Replace: Yes)"
+
+        # Multiple replace challengers: find common comparable benchmarks
+        candidate_ev_maps = {}
+        all_benchmark_keys = None
+
+        for r in replace_yes_reports:
+            c_map = {}
+            r_eval = r.role_evaluations[role]
+            ev_list = list(r_eval.all_evidence)
+            if r_eval.primary_evidence and r_eval.primary_evidence not in ev_list:
+                ev_list.append(r_eval.primary_evidence)
+
+            for ev in ev_list:
+                if ev.score_challenger is not None:
+                    b_key = (ev.source, ev.benchmark, ev.version, ev.display_metric)
+                    c_map[b_key] = (float(ev.score_challenger), ev.harness, ev.known_uncertainty)
+
+            candidate_ev_maps[r.model.display_name] = c_map
+            if all_benchmark_keys is None:
+                all_benchmark_keys = set(c_map.keys())
+            else:
+                all_benchmark_keys &= set(c_map.keys())
+
+        valid_common_keys = []
+        if all_benchmark_keys:
+            for b_key in sorted(all_benchmark_keys):
+                harnesses = set(candidate_ev_maps[r.model.display_name][b_key][1] for r in replace_yes_reports)
+                uncertainties = [candidate_ev_maps[r.model.display_name][b_key][2] for r in replace_yes_reports]
+                has_harness_issue = any("harness" in (u or "").lower() for u in uncertainties)
+                if len(harnesses) == 1 and not has_harness_issue:
+                    valid_common_keys.append(b_key)
+
+        if valid_common_keys:
+            chosen_key = valid_common_keys[0]
+            source, benchmark, version, metric = chosen_key
+
+            scores_list = []
+            for r in replace_yes_reports:
+                name = r.model.display_name
+                score = candidate_ev_maps[name][chosen_key][0]
+                scores_list.append((score, name))
+
+            scores_list.sort(key=lambda item: (-item[0], item[1]))
+
+            top_score, top_name = scores_list[0]
+            tied = [name for score, name in scores_list if abs(score - top_score) < 1e-6]
+
+            metric_str = metric if metric else ""
+            if len(tied) > 1:
+                tied.sort()
+                return f"Tie: {' / '.join(tied)} ({top_score:.1f}{metric_str} on {benchmark})"
+            else:
+                return f"**{top_name}** ({top_score:.1f}{metric_str} on {benchmark})"
+
+        # No common benchmark among Replace: Yes candidates
+        names_sorted = sorted([r.model.display_name for r in replace_yes_reports])
+        return f"{' / '.join(names_sorted)} all outperform current incumbent; insufficient comparable evidence to rank them reliably."
 
     def save_comparison_report(self, content: str, tag: str = "comparison") -> Path:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
