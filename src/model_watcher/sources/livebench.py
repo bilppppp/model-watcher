@@ -18,15 +18,20 @@ def _normalize_name(name: str) -> str:
     return s
 
 
+_GLOBAL_LIVEBENCH_CATEGORIES: Optional[Dict[str, List[str]]] = None
+_GLOBAL_LIVEBENCH_SCORES: Optional[Dict[str, Dict[str, float]]] = None
+_GLOBAL_LIVEBENCH_RAW_MODELS: Optional[List[str]] = None
+
+
 class LiveBenchSource(DataSource):
     name: str = "LiveBench"
     priority: int = 0  # P0
 
     def __init__(self):
         self.latest_date: str = "2026_06_25"
-        self._categories: Optional[Dict[str, List[str]]] = None
-        self._model_scores: Optional[Dict[str, Dict[str, float]]] = None
-        self._raw_models: List[str] = []
+        self._categories: Optional[Dict[str, List[str]]] = _GLOBAL_LIVEBENCH_CATEGORIES
+        self._model_scores: Optional[Dict[str, Dict[str, float]]] = _GLOBAL_LIVEBENCH_SCORES
+        self._raw_models: List[str] = _GLOBAL_LIVEBENCH_RAW_MODELS or []
 
     def _discover_latest_date(self) -> str:
         api_url = "https://api.github.com/repos/LiveBench/new-livebench/contents/public"
@@ -46,7 +51,11 @@ class LiveBenchSource(DataSource):
         return self.latest_date
 
     def _load_data(self) -> None:
-        if self._model_scores is not None:
+        global _GLOBAL_LIVEBENCH_CATEGORIES, _GLOBAL_LIVEBENCH_SCORES, _GLOBAL_LIVEBENCH_RAW_MODELS
+        if _GLOBAL_LIVEBENCH_SCORES is not None:
+            self._categories = _GLOBAL_LIVEBENCH_CATEGORIES
+            self._model_scores = _GLOBAL_LIVEBENCH_SCORES
+            self._raw_models = _GLOBAL_LIVEBENCH_RAW_MODELS or []
             return
 
         self._discover_latest_date()
@@ -56,6 +65,7 @@ class LiveBenchSource(DataSource):
         try:
             cat_bytes = http_get(cat_url, timeout=15)
             self._categories = json.loads(cat_bytes.decode("utf-8"))
+            _GLOBAL_LIVEBENCH_CATEGORIES = self._categories
         except Exception as e:
             logger.error(f"Failed to fetch LiveBench categories: {e}")
             self._categories = {}
@@ -87,9 +97,13 @@ class LiveBenchSource(DataSource):
                         scores[model_name][category] = sum(subtask_vals) / len(subtask_vals)
 
             self._model_scores = scores
+            _GLOBAL_LIVEBENCH_SCORES = scores
+            _GLOBAL_LIVEBENCH_RAW_MODELS = self._raw_models
         except Exception as e:
             logger.error(f"Failed to fetch LiveBench table: {e}")
             self._model_scores = {}
+            _GLOBAL_LIVEBENCH_SCORES = {}
+            _GLOBAL_LIVEBENCH_RAW_MODELS = []
 
     def discover_models(self) -> List[ModelMetadata]:
         self._load_data()

@@ -125,3 +125,20 @@ class EvaluationReport:
     key_takeaway: str = ""
     evidence_ledger: List[BenchmarkEvidence] = field(default_factory=list)
     created_at: str = ""
+    baseline_revision: int = 1
+    baseline_calibrated_at: str = ""
+
+
+class ModelNotFoundError(Exception):
+    """Raised when a specified model cannot be resolved in any structured source."""
+    pass
+
+
+class AmbiguousModelError(Exception):
+    """Raised when a model identifier matches multiple candidates."""
+    pass
+
+
+class NeedsCalibrationError(Exception):
+    """Raised when operation requires baseline calibration but none exists."""
+    pass

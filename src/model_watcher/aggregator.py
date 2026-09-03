@@ -13,7 +13,14 @@ from model_watcher.sources.livebench import LiveBenchSource
 from model_watcher.sources.lmms_eval import LMMsEvalSource
 from model_watcher.sources.swebench import SWEBenchSource
 from model_watcher.state import WatcherState
-from model_watcher.types import BenchmarkEvidence, ModelMetadata, ReleaseEvidenceLevel, Role
+from model_watcher.types import (
+    AmbiguousModelError,
+    BenchmarkEvidence,
+    ModelMetadata,
+    ModelNotFoundError,
+    ReleaseEvidenceLevel,
+    Role,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +111,9 @@ def extract_date_from_name(name: Optional[str]) -> Optional[str]:
     return None
 
 
+_HF_CACHE: Dict[str, Optional[str]] = {}
+
+
 def query_huggingface_repository_created_at(model_id: str) -> Optional[str]:
     """Queries official Hugging Face Hub for repo creation date.
 
@@ -112,6 +122,9 @@ def query_huggingface_repository_created_at(model_id: str) -> Optional[str]:
     Saved strictly as repository_first_seen (OBSERVED_ONLY).
     """
     clean_id = re.sub(r"-(high|medium|low|xhigh|thinking|preview|instruct|fp8|chat)$", "", model_id.lower())
+    if clean_id in _HF_CACHE:
+        return _HF_CACHE[clean_id]
+
     search_term = clean_id.split("-")[0] if "-" in clean_id else clean_id
     if len(search_term) < 3:
         search_term = clean_id
@@ -119,15 +132,18 @@ def query_huggingface_repository_created_at(model_id: str) -> Optional[str]:
     url = f"https://huggingface.co/api/models?search={urllib.parse.quote(search_term)}&limit=3"
     req = urllib.request.Request(url, headers={"User-Agent": "ModelWatcher/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             for item in data:
                 item_id = item.get("id", "").lower()
                 created_at = item.get("createdAt")
                 if created_at and (clean_id in item_id or item_id in clean_id):
-                    return created_at[:10]
+                    res = created_at[:10]
+                    _HF_CACHE[clean_id] = res
+                    return res
     except Exception as e:
         logger.debug(f"HF model query skipped for {model_id}: {e}")
+    _HF_CACHE[clean_id] = None
     return None
 
 
@@ -138,17 +154,11 @@ def confirm_release_fallback(model: ModelMetadata) -> None:
     - INFERRED: trusted provider canonical model identifier contains explicit date
     - OBSERVED_ONLY: HF repo createdAt, benchmark submission date
     """
-    # 1. Query HF repo createdAt as repository_first_seen (OBSERVED_ONLY evidence)
-    if not model.repository_first_seen:
-        hf_created = query_huggingface_repository_created_at(model.canonical_id)
-        if hf_created:
-            model.repository_first_seen = hf_created
-
-    # If already confirmed or trusted, keep existing high-confidence provenance
+    # If already confirmed or trusted, keep existing high-confidence provenance immediately!
     if model.release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
         return
 
-    # 2. Check if trusted provider's canonical model ID explicitly includes version date
+    # Check if trusted provider's canonical model ID explicitly includes version date
     if is_trusted_provider(model.provider, model.canonical_id):
         date_in_name = extract_date_from_name(model.canonical_id) or extract_date_from_name(model.display_name)
         if date_in_name:
@@ -156,6 +166,12 @@ def confirm_release_fallback(model: ModelMetadata) -> None:
             model.release_evidence_level = ReleaseEvidenceLevel.INFERRED.value
             model.release_confirmed = False  # Inferred, not confirmed
             return
+
+    # Query HF repo createdAt as repository_first_seen (OBSERVED_ONLY evidence)
+    if not model.repository_first_seen:
+        hf_created = query_huggingface_repository_created_at(model.canonical_id)
+        if hf_created:
+            model.repository_first_seen = hf_created
 
     # 3. Otherwise, remains OBSERVED_ONLY; do NOT fabricate release date
     model.release_evidence_level = ReleaseEvidenceLevel.OBSERVED_ONLY.value
@@ -212,6 +228,57 @@ class ModelAggregator:
 
         return list(all_models.values())
 
+    def resolve_model(self, model_query: str, candidates: Optional[List[ModelMetadata]] = None) -> ModelMetadata:
+        """Resolves user-supplied model query to canonical ModelMetadata from structured benchmarks.
+
+        Raises:
+            ModelNotFoundError: If no candidate matches query.
+            AmbiguousModelError: If multiple distinct models match query.
+        """
+        if candidates is None:
+            candidates = self.discover_all_candidates()
+
+        q_clean = re.sub(r"[^a-z0-9]", "", model_query.lower())
+        if not q_clean:
+            raise ModelNotFoundError(f"Invalid empty model identifier: '{model_query}'")
+
+        # 1. Exact match on canonical_id or display_name
+        for m in candidates:
+            m_canon = re.sub(r"[^a-z0-9]", "", m.canonical_id.lower())
+            m_disp = re.sub(r"[^a-z0-9]", "", m.display_name.lower())
+            if q_clean == m_canon or q_clean == m_disp:
+                return m
+
+        # 2. Substring matching
+        matches = []
+        for m in candidates:
+            m_canon = re.sub(r"[^a-z0-9]", "", m.canonical_id.lower())
+            m_disp = re.sub(r"[^a-z0-9]", "", m.display_name.lower())
+            if q_clean in m_canon or q_clean in m_disp:
+                matches.append(m)
+
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) > 1:
+            exact_prefix_matches = [
+                m for m in matches
+                if m.canonical_id.lower().startswith(model_query.lower())
+                or m.display_name.lower().startswith(model_query.lower())
+            ]
+            if len(exact_prefix_matches) == 1:
+                return exact_prefix_matches[0]
+
+            matched_ids = [m.canonical_id for m in matches[:6]]
+            raise AmbiguousModelError(
+                f"Ambiguous model identifier '{model_query}'. Multiple matches found: {matched_ids}. "
+                "Please specify a more exact model name."
+            )
+
+        raise ModelNotFoundError(
+            f"Model '{model_query}' could not be resolved in any structured benchmark source "
+            "(LiveBench, SWE-bench, Harbor Hub, Artificial Analysis)."
+        )
+
     def get_pending_models(
         self,
         state: WatcherState,
@@ -234,25 +301,8 @@ class ModelAggregator:
             return []
 
         if force_model:
-            norm_target = re.sub(r"[^a-z0-9]", "", force_model.lower())
-            matched = [
-                m for m in candidates
-                if norm_target in re.sub(r"[^a-z0-9]", "", m.canonical_id.lower())
-                or norm_target in re.sub(r"[^a-z0-9]", "", m.display_name.lower())
-            ]
-            if matched:
-                return matched[:1]
-            return [
-                ModelMetadata(
-                    canonical_id=force_model,
-                    display_name=force_model,
-                    provider="Targeted Model",
-                    first_seen="2026-09-03",
-                    release_confirmed=True,
-                    release_evidence_level=ReleaseEvidenceLevel.CONFIRMED.value,
-                    raw_source="Targeted Evaluation",
-                )
-            ]
+            matched_model = self.resolve_model(force_model, candidates=candidates)
+            return [matched_model]
 
         pending = []
         for m in candidates:

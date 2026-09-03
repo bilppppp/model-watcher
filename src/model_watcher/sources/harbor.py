@@ -18,6 +18,9 @@ def _normalize_name(name: str) -> str:
     return s
 
 
+_GLOBAL_HARBOR_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
 class HarborSource(DataSource):
     name: str = "Harbor Hub"
     priority: int = 0  # P0
@@ -30,7 +33,7 @@ class HarborSource(DataSource):
     ]
 
     def __init__(self):
-        self._cached_boards: Dict[str, Dict[str, Any]] = {}
+        self._cached_boards: Dict[str, Dict[str, Any]] = _GLOBAL_HARBOR_CACHE
         self._available: Optional[bool] = None
 
     def _is_available(self) -> bool:
@@ -41,8 +44,8 @@ class HarborSource(DataSource):
         return self._available
 
     def _fetch_board_json(self, board_id: str) -> Optional[Dict[str, Any]]:
-        if board_id in self._cached_boards:
-            return self._cached_boards[board_id]
+        if board_id in _GLOBAL_HARBOR_CACHE:
+            return _GLOBAL_HARBOR_CACHE[board_id]
 
         if not self._is_available():
             return None
@@ -52,7 +55,7 @@ class HarborSource(DataSource):
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
             if res.returncode == 0 and res.stdout.strip().startswith("{"):
                 data = json.loads(res.stdout)
-                self._cached_boards[board_id] = data
+                _GLOBAL_HARBOR_CACHE[board_id] = data
                 return data
         except Exception as e:
             logger.warning(f"Failed to fetch Harbor board {board_id}: {e}")

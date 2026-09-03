@@ -25,7 +25,8 @@ class MarkdownReporter:
         lines.append(f"**结论：** {report.overall_verdict}")
         lines.append(f"**本次改变：{report.routes_changed}/{report.total_routes} 个当前模型路由**")
 
-        # Provenance line
+        # Provenance and Calibration lines
+        lines.append(f"**Baseline Calibration:** Revision {report.baseline_revision} ({report.baseline_calibrated_at or 'Initial'})")
         if report.model.release_evidence_level == ReleaseEvidenceLevel.INFERRED.value:
             lines.append(f"**发布日期：** {report.model.release_date or '未知'} *(INFERRED: 推断自厂商标准模型版本标识，非官方直接确证)*")
         elif report.model.release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
@@ -120,4 +121,64 @@ class MarkdownReporter:
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(content)
 
+        return out_path
+
+    def format_multi_compare_summary(
+        self,
+        reports: list,
+    ) -> str:
+        """Generates a cross-model summary table:
+        | Role | Current | Model A | Model B | Model C | Recommendation |
+        """
+        lines = []
+        lines.append("# 📊 Cross-Model Comparison Summary\n")
+        if reports:
+            first = reports[0]
+            lines.append(f"**Baseline Calibration:** Revision {first.baseline_revision} ({first.baseline_calibrated_at or 'Initial'})\n")
+
+        model_headers = [r.model.display_name for r in reports]
+        header_row = "| Role | Current | " + " | ".join(model_headers) + " | Recommendation |"
+        sep_row = "|---|---|" + "|".join(["---"] * len(reports)) + "|---|"
+        lines.append(header_row)
+        lines.append(sep_row)
+
+        for role in Role:
+            current_incumbent = reports[0].role_evaluations[role].incumbent_model if reports and role in reports[0].role_evaluations else "Current"
+            row_items = [role.display_name, current_incumbent]
+
+            best_replace_candidate = None
+            better_candidates = []
+
+            for r in reports:
+                ev = r.role_evaluations.get(role)
+                if ev:
+                    row_items.append(ev.capability.value)
+                    if ev.replace.value == "Yes":
+                        best_replace_candidate = r.model.display_name
+                    elif ev.capability.value in ("↑ Clearly better", "↗ Probably better"):
+                        better_candidates.append(r.model.display_name)
+                else:
+                    row_items.append("? Insufficient evidence")
+
+            # Recommendation logic: faithful to evidence, no forced ranking
+            if best_replace_candidate:
+                rec = f"**{best_replace_candidate}** (Replace: Yes)"
+            elif better_candidates:
+                rec = f"Retain {current_incumbent} (Leads not worth switching)"
+            else:
+                rec = f"Retain {current_incumbent}"
+
+            row_items.append(rec)
+            lines.append("| " + " | ".join(row_items) + " |")
+
+        lines.append("")
+        return "\n".join(lines)
+
+    def save_comparison_report(self, content: str, tag: str = "comparison") -> Path:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        safe_tag = tag.replace("/", "_").replace(":", "_").replace(" ", "_")
+        filename = f"{date_str}_{safe_tag}.md"
+        out_path = self.reports_dir / filename
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(content)
         return out_path

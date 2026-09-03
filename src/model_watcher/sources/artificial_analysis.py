@@ -16,6 +16,9 @@ def _normalize_name(name: str) -> str:
     return s
 
 
+_GLOBAL_AA_MODELS: Optional[List[Dict[str, Any]]] = None
+
+
 class ArtificialAnalysisSource(DataSource):
     name: str = "Artificial Analysis"
     priority: int = 1  # P1
@@ -25,15 +28,18 @@ class ArtificialAnalysisSource(DataSource):
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY", "")
-        self._cached_models: Optional[List[Dict[str, Any]]] = None
+        self._cached_models: Optional[List[Dict[str, Any]]] = _GLOBAL_AA_MODELS
 
     def _load_data(self) -> None:
-        if self._cached_models is not None:
+        global _GLOBAL_AA_MODELS
+        if _GLOBAL_AA_MODELS is not None:
+            self._cached_models = _GLOBAL_AA_MODELS
             return
 
         if not self.api_key:
             logger.info("ARTIFICIAL_ANALYSIS_API_KEY not set. Skipping live AA API call.")
             self._cached_models = []
+            _GLOBAL_AA_MODELS = []
             return
 
         url = f"{self.BASE_URL}{self.FREE_ENDPOINT}"
@@ -41,9 +47,11 @@ class ArtificialAnalysisSource(DataSource):
             headers = {"x-api-key": self.api_key}
             data = http_get_json(url, headers=headers, timeout=15)
             self._cached_models = data.get("data", [])
+            _GLOBAL_AA_MODELS = self._cached_models
         except Exception as e:
             logger.warning(f"Failed to fetch Artificial Analysis free language models: {e}")
             self._cached_models = []
+            _GLOBAL_AA_MODELS = []
 
     def discover_models(self) -> List[ModelMetadata]:
         self._load_data()

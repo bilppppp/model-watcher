@@ -211,4 +211,6 @@ class ModelEvaluator:
             new_use_cases=new_use_cases,
             key_takeaway=key_takeaway,
             evidence_ledger=evidence_ledger,
+            baseline_revision=self.profile.revision,
+            baseline_calibrated_at=self.profile.calibrated_at,
         )

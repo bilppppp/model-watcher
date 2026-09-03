@@ -1,6 +1,6 @@
 ---
 name: model-watcher
-description: Autonomous frontier AI model monitor. Evaluates whether new mainstream models alter the user's current 7-role workflow routing (Coder, Planner, Reviewer, Reasoner, Analyst, Agent, Multimodal) against active incumbents using machine-readable benchmark evidence (SWE-bench, LiveBench, Harbor Hub, Artificial Analysis). Run-once, idempotent, produces 30s actionable reports.
+description: Autonomous frontier AI model monitor and on-demand comparator. Evaluates whether new mainstream models alter the user's current 7-role workflow routing (Coder, Planner, Reviewer, Reasoner, Analyst, Agent, Multimodal) against active calibrated incumbents using machine-readable benchmark evidence (SWE-bench, LiveBench, Harbor Hub, Artificial Analysis). Supports run (monitor), compare (on-demand comparison), and calibrate (lifecycle baseline update).
 ---
 
 # Model Watcher
@@ -11,7 +11,45 @@ It answers one specific question:
 
 > Has a new mainstream AI model appeared recently? If so, does it justify changing the user's current 7-role model division of labor?
 
-Every challenger is evaluated head-to-head against the user's actual **incumbent** models across 7 fixed operational roles, rather than evaluating models in isolation.
+Every challenger is evaluated head-to-head against the user's actual **calibrated incumbent** models across 7 fixed operational roles, rather than evaluating models in isolation.
+
+---
+
+## Natural Language Intent Mapping
+
+When the user gives instructions to the Agent:
+
+### 1. Monitor Intent
+*Examples:*
+- "检查有没有新模型"
+- "最近模型发布有没有改变我的选择"
+- "运行一次监控"
+- "看看今天有没有值得换的模型"
+
+→ Execute: `./bin/model-watcher run`
+
+### 2. Compare Intent
+*Examples:*
+- "比较 Gemini 3.8 Flash 和 Sol"
+- "帮我评估 Opus 5"
+- "这三个模型我应该怎么分工"
+- "对比 A、B、C"
+- "Claude 3.7 Sonnet 和 GPT-4o 谁更适合做我的 Coder"
+
+→ Execute: `./bin/model-watcher compare MODEL [MODEL ...]`
+
+### 3. Calibration Intent
+*Examples:*
+- "我换模型了"
+- "更新一下我现在用的模型"
+- "重新校准"
+- "我现在有 A、B、C"
+- "我的当前主力模型变了"
+
+→ Execute: `./bin/model-watcher calibrate`
+
+> [!IMPORTANT]
+> **No Guessing**: If any `compare` or `run` command discovers that no valid calibration profile (`profile.yaml`) exists, Model Watcher will **not** guess or fabricate a baseline. It will require the user to complete calibration first (`./bin/model-watcher calibrate`).
 
 ---
 
@@ -71,69 +109,50 @@ Models with comparable capability but 10x lower cost are suggested as **cheap ba
 
 ---
 
-## User Baseline Profile (`profile.yaml`)
+## Current Calibration (`profile.yaml`)
 
-Persists user's current model allocation:
+Persists user's current model allocation with formal calibration metadata:
+- `revision: <int>` (increments +1 on every confirmed recalibration)
+- `calibrated_at: <ISO timestamp>`
 - Accessible / owned models
 - Primary incumbent for each of the 7 roles
 - Fallback models
 - Constraints (cost sensitivity, budget, preferred providers)
 
-**Zero Silent Modification**: Model Watcher only proposes `Role: A → B` adjustment recommendations. It never modifies `profile.yaml` without explicit user confirmation.
-
-If `profile.yaml` is missing on first run, Model Watcher launches a guided initialization flow asking one question at a time.
+**Zero Silent Modification**: Model Watcher only proposes `Role: A → B` adjustment recommendations. It never modifies `profile.yaml` without explicit user confirmation during the recalibration diff review.
 
 ---
 
-## State Persistence (`state.json`)
+## On-Demand Compare (`compare MODEL [MODEL ...]`)
 
-Simple, database-free JSON state:
-- Model canonical ID & display name
-- Provider
-- `first_seen` & `evaluated_at`
-- Lifecycle Status: `NEW` → `PROVISIONAL` → `MATURE`
-- Reference to generated report
-
-### Lifecycle Rules
-1. **First Seen**: Evaluated immediately as `PROVISIONAL`.
-2. **~7 Days Later**: Eligible for one mature review to reach `MATURE`.
-3. **Mature**: Never repeated on subsequent runs unless major new evidence emerges.
-4. **Idempotence**: Running multiple times without new models exits cleanly and quickly.
-
----
-
-## Data Source Hierarchy
-
-- **P0**: Official machine-readable benchmark results
-  - **LiveBench**: `LiveBench/new-livebench` public repository (`table_<date>.csv`, `categories_<date>.json`)
-  - **SWE-bench**: `SWE-bench/swe-bench.github.io` (`data/leaderboards.json`)
-  - **Harbor Hub**: Official CLI `harbor hub leaderboard show <id> --json` (Terminal-Bench 2.0 / 4.0 / 2.1)
-- **P1**: Independent standardized benchmarks
-  - **Artificial Analysis**: Data API v2 (`GET /language/models/free`, auth via `x-api-key`)
-  - **LMMs-Eval**: Official benchmark suites for multimodal evaluations
-- **P2**: Official model cards and release notes
-- **P3**: Reproducible 3rd-party evals
-- **P4**: Trusted community production feedback
-- **P5**: Media / secondary information
+Semantic separation from Monitor:
+- Does **not** require candidate to be a recent release
+- Does **not** pass through the 60-day release gate
+- Does **not** require release date confirmation
+- Does **not** modify `state.json` or alter model lifecycle states
+- Re-reads latest benchmark evidence and compares against current calibration revision
+- Produces individual role comparison reports plus a **Cross-Model Role Summary Table** for multi-model queries:
+  `| Role | Current | Model A | Model B | Model C | Recommendation |`
 
 ---
 
 ## CLI Usage
 
-Run once (designed to be invoked by external schedulers or on-demand):
-
 ```bash
-# Standard single execution
+# 1. On-demand Model Compare (single or multi-model)
+./bin/model-watcher compare "gemini-3.8-flash"
+./bin/model-watcher compare "gemini-3.8-flash" "gpt-5.6-sol" "claude-opus-5"
+
+# 2. Recalibrate Baseline Routing
+./bin/model-watcher calibrate
+
+# 3. Monitor Check (Single idempotent run for external schedulers)
 ./bin/model-watcher run
-# or
-uv run python3 -m model_watcher.cli run
 
-# Check status of baseline and tracked models
+# 4. View Current Status & Calibration
 ./bin/model-watcher status
-
-# Force dry-run evaluation on a specific frontier model
-./bin/model-watcher run --model "claude-opus-4-7" --dry-run
 ```
 
 Reports are stored in:
-`reports/YYYY-MM-DD_<model-id>.md`
+- Monitor: `reports/YYYY-MM-DD_<model-id>.md`
+- Compare: `reports/YYYY-MM-DD_compare_<tag>.md`

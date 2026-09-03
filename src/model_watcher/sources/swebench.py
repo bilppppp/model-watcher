@@ -16,16 +16,21 @@ def _normalize_name(name: str) -> str:
     return s
 
 
+_GLOBAL_SWEBENCH_RESULTS: Optional[List[Dict[str, Any]]] = None
+
+
 class SWEBenchSource(DataSource):
     name: str = "SWE-bench"
     priority: int = 0  # P0
 
     def __init__(self):
         self._raw_data: Optional[Dict[str, Any]] = None
-        self._verified_results: Optional[List[Dict[str, Any]]] = None
+        self._verified_results: Optional[List[Dict[str, Any]]] = _GLOBAL_SWEBENCH_RESULTS
 
     def _load_data(self) -> None:
-        if self._verified_results is not None:
+        global _GLOBAL_SWEBENCH_RESULTS
+        if _GLOBAL_SWEBENCH_RESULTS is not None:
+            self._verified_results = _GLOBAL_SWEBENCH_RESULTS
             return
 
         url = "https://raw.githubusercontent.com/SWE-bench/swe-bench.github.io/master/data/leaderboards.json"
@@ -39,9 +44,11 @@ class SWEBenchSource(DataSource):
                     break
             if self._verified_results is None:
                 self._verified_results = []
+            _GLOBAL_SWEBENCH_RESULTS = self._verified_results
         except Exception as e:
             logger.error(f"Failed to fetch SWE-bench leaderboards.json: {e}")
             self._verified_results = []
+            _GLOBAL_SWEBENCH_RESULTS = []
 
     def discover_models(self) -> List[ModelMetadata]:
         self._load_data()
