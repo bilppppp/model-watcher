@@ -103,3 +103,40 @@ class TestState(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReleaseConfirmationFallback(unittest.TestCase):
+    def test_fallback_extracts_date_from_model_name(self):
+        """Test Issue #2: 无 AA Key 时，通过名称版本标识或官方来源确认发布时间"""
+        from model_watcher.aggregator import confirm_release_fallback
+        from model_watcher.types import ModelMetadata
+
+        m = ModelMetadata(
+            canonical_id="claude-opus-4-5-20251101-thinking-64k-high-effort",
+            display_name="Claude Opus 4.5",
+            provider="Anthropic",
+            release_date=None,
+            release_confirmed=False,
+        )
+        confirm_release_fallback(m)
+        self.assertTrue(m.release_confirmed)
+        self.assertEqual(m.release_date, "2025-11-01")
+
+    def test_fallback_recent_date_qualifies_for_evaluation(self):
+        """Recent date confirmed via fallback is not swallowed."""
+        from model_watcher.aggregator import confirm_release_fallback
+        from model_watcher.types import ModelMetadata
+
+        recent_tag = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+        m = ModelMetadata(
+            canonical_id=f"frontier-model-{recent_tag}",
+            display_name="Frontier Model",
+            provider="Vendor",
+            release_date=None,
+            release_confirmed=False,
+        )
+        confirm_release_fallback(m)
+        self.assertTrue(m.release_confirmed)
+
+        state = WatcherState()
+        self.assertTrue(state.should_evaluate(m.canonical_id, release_date=m.release_date, release_confirmed=m.release_confirmed))

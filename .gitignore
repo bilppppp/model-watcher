@@ -24,7 +24,14 @@ wheels/
 # Secrets & Local credentials
 .env
 .env.*
+
+# Runtime data files (must not make repository dirty during cron runs)
+profile.yaml
+state.json
+reports/*.md
+!reports/.gitkeep
 !profile.yaml.example
+!state.json.example
 
 # Symlinks for local runtime discovery
 .agents/

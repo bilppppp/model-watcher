@@ -1,7 +1,9 @@
 """Model discovery and evidence aggregation across structured data sources."""
 import datetime
+import json
 import logging
 import re
+import urllib.request
 from typing import Dict, List, Optional
 
 from model_watcher.sources.artificial_analysis import ArtificialAnalysisSource
@@ -46,6 +48,61 @@ def is_in_tracking_scope(model: ModelMetadata) -> bool:
     return True
 
 
+def extract_date_from_name(name: str) -> Optional[str]:
+    """Extracts explicit version/release date formatted in model name."""
+    # Match YYYY-MM-DD
+    m1 = re.search(r"(202[3-9])-([01][0-9])-([0-3][0-9])", name)
+    if m1:
+        return f"{m1.group(1)}-{m1.group(2)}-{m1.group(3)}"
+    # Match YYYYMMDD
+    m2 = re.search(r"(202[3-9])([01][0-9])([0-3][0-9])", name)
+    if m2:
+        return f"{m2.group(1)}-{m2.group(2)}-{m2.group(3)}"
+    return None
+
+
+def query_huggingface_model_card_date(model_id: str) -> Optional[str]:
+    """Fallback query to official Hugging Face Model Card API for open-weights models."""
+    clean_id = re.sub(r"-(high|medium|low|xhigh|thinking|preview|instruct|fp8|chat)$", "", model_id.lower())
+    search_term = clean_id.split("-")[0] if "-" in clean_id else clean_id
+    if len(search_term) < 3:
+        search_term = clean_id
+
+    url = f"https://huggingface.co/api/models?search={urllib.parse.quote(search_term)}&limit=3"
+    req = urllib.request.Request(url, headers={"User-Agent": "ModelWatcher/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for item in data:
+                item_id = item.get("id", "").lower()
+                created_at = item.get("createdAt")
+                if created_at and (clean_id in item_id or item_id in clean_id):
+                    return created_at[:10]
+    except Exception as e:
+        logger.debug(f"HF model card query skipped for {model_id}: {e}")
+    return None
+
+
+def confirm_release_fallback(model: ModelMetadata) -> None:
+    """When AA is unavailable or lacks release date, verify via official name tags or official model cards."""
+    if model.release_confirmed and model.release_date:
+        return
+
+    # 1. Check embedded version date in model name / ID
+    date_in_name = extract_date_from_name(model.canonical_id) or extract_date_from_name(model.display_name)
+    if date_in_name:
+        model.release_date = date_in_name
+        model.release_confirmed = True
+        return
+
+    # 2. Check official model card metadata on Hugging Face (for open-weights models)
+    hf_date = query_huggingface_model_card_date(model.canonical_id)
+    if hf_date:
+        model.release_date = hf_date
+        model.release_confirmed = True
+        return
+
+
 class ModelAggregator:
     def __init__(self, sources: Optional[List] = None):
         if sources is not None:
@@ -76,7 +133,6 @@ class ModelAggregator:
                         all_models[canon_key] = m
                     else:
                         existing = all_models[canon_key]
-                        # Prefer confirmed release date from trusted discovery source
                         if not existing.release_confirmed and m.release_confirmed:
                             existing.release_date = m.release_date
                             existing.release_confirmed = m.release_confirmed
@@ -94,6 +150,11 @@ class ModelAggregator:
             except Exception as e:
                 logger.warning(f"Error discovering models from {src.name}: {e}")
 
+        # Execute fallback release confirmation for candidates lacking AA release date
+        for m in all_models.values():
+            if not m.release_confirmed:
+                confirm_release_fallback(m)
+
         return list(all_models.values())
 
     def get_pending_models(
@@ -102,16 +163,9 @@ class ModelAggregator:
         force_model: Optional[str] = None,
         is_bootstrap: bool = False,
     ) -> List[ModelMetadata]:
-        """Finds candidate models that qualify for evaluation.
-
-        - If is_bootstrap: records all current candidates into state as baseline SEEN; returns []
-        - If force_model: returns specifically targeted model for user-requested evaluation
-        - Otherwise: separates 'new benchmark entry' from 'new model release' using release confirmation.
-        """
         candidates = self.discover_all_candidates()
 
         if is_bootstrap:
-            # Bootstrap: record all current historical models as SEEN
             for m in candidates:
                 state.record_seen(
                     canonical_id=m.canonical_id,
@@ -123,7 +177,6 @@ class ModelAggregator:
             return []
 
         if force_model:
-            # Explicit user evaluation request
             norm_target = re.sub(r"[^a-z0-9]", "", force_model.lower())
             matched = [
                 m for m in candidates
@@ -132,7 +185,6 @@ class ModelAggregator:
             ]
             if matched:
                 return matched[:1]
-            # Fallback construct
             return [
                 ModelMetadata(
                     canonical_id=force_model,
@@ -153,8 +205,6 @@ class ModelAggregator:
             ):
                 pending.append(m)
             elif m.canonical_id not in state.models:
-                # Benchmark entry without confirmed recent release date:
-                # Record as SEEN to avoid re-checking, but do NOT alert user
                 state.record_seen(
                     canonical_id=m.canonical_id,
                     display_name=m.display_name,
@@ -171,7 +221,6 @@ class ModelAggregator:
         incumbent: str,
         role: Role,
     ) -> List[BenchmarkEvidence]:
-        """Gathers all available comparative evidence across all data sources."""
         evidence_list: List[BenchmarkEvidence] = []
         for src in self.sources:
             try:
