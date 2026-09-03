@@ -46,6 +46,13 @@ class ModelLifecycleStatus(str, Enum):
     MATURE = "MATURE"                # Re-evaluated ~7 days later or established incumbent
 
 
+class ReleaseEvidenceLevel(str, Enum):
+    CONFIRMED = "CONFIRMED"          # Vendor official release page / changelog / model card explicit release date
+    TRUSTED = "TRUSTED"              # Artificial Analysis verified release_date
+    INFERRED = "INFERRED"            # Trusted provider's canonical model ID contains explicit legal version date
+    OBSERVED_ONLY = "OBSERVED_ONLY"  # HF repo createdAt, benchmark submission date, GitHub commit date
+
+
 @dataclass
 class BenchmarkEvidence:
     source: str
@@ -92,7 +99,9 @@ class ModelMetadata:
     display_name: str
     provider: str
     release_date: Optional[str] = None
+    release_evidence_level: str = ReleaseEvidenceLevel.OBSERVED_ONLY.value
     release_confirmed: bool = False
+    repository_first_seen: Optional[str] = None
     benchmark_first_seen: str = ""
     input_price_per_m: Optional[float] = None
     output_price_per_m: Optional[float] = None

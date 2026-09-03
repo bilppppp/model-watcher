@@ -7,21 +7,19 @@ from pathlib import Path
 import re
 from typing import Any, Dict, Optional
 
-from model_watcher.types import ModelLifecycleStatus
+from model_watcher.types import ModelLifecycleStatus, ReleaseEvidenceLevel
 
 
 def parse_date(date_str: Optional[str]) -> Optional[datetime]:
     if not date_str:
         return None
     cleaned = date_str.strip().replace("_", "-")
-    # Try YYYY-MM-DD
     m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", cleaned)
     if m:
         try:
             return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
         except ValueError:
             return None
-    # Try ISO
     try:
         return datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
     except Exception:
@@ -43,7 +41,9 @@ class TrackedModelRecord:
     display_name: str
     provider: str
     benchmark_first_seen: str
+    repository_first_seen: Optional[str] = None
     release_date: Optional[str] = None
+    release_evidence_level: str = ReleaseEvidenceLevel.OBSERVED_ONLY.value
     release_confirmed: bool = False
     evaluated_at: Optional[str] = None
     status: str = ModelLifecycleStatus.SEEN.value
@@ -61,7 +61,9 @@ class TrackedModelRecord:
             display_name=data.get("display_name", data["canonical_id"]),
             provider=data.get("provider", "Unknown"),
             benchmark_first_seen=data.get("benchmark_first_seen") or data.get("first_seen") or datetime.now(timezone.utc).isoformat(),
+            repository_first_seen=data.get("repository_first_seen"),
             release_date=data.get("release_date"),
+            release_evidence_level=data.get("release_evidence_level", ReleaseEvidenceLevel.OBSERVED_ONLY.value),
             release_confirmed=bool(data.get("release_confirmed", False)),
             evaluated_at=data.get("evaluated_at"),
             status=data.get("status", ModelLifecycleStatus.SEEN.value),
@@ -83,7 +85,9 @@ class WatcherState:
         display_name: str,
         provider: str,
         release_date: Optional[str] = None,
+        release_evidence_level: str = ReleaseEvidenceLevel.OBSERVED_ONLY.value,
         release_confirmed: bool = False,
+        repository_first_seen: Optional[str] = None,
     ) -> TrackedModelRecord:
         """Records a model as known historical baseline without generating an evaluation report."""
         now_str = datetime.now(timezone.utc).isoformat()
@@ -91,7 +95,10 @@ class WatcherState:
             rec = self.models[canonical_id]
             if release_date and not rec.release_date:
                 rec.release_date = release_date
+                rec.release_evidence_level = release_evidence_level
                 rec.release_confirmed = release_confirmed
+            if repository_first_seen and not rec.repository_first_seen:
+                rec.repository_first_seen = repository_first_seen
             return rec
 
         rec = TrackedModelRecord(
@@ -99,7 +106,9 @@ class WatcherState:
             display_name=display_name,
             provider=provider,
             benchmark_first_seen=now_str,
+            repository_first_seen=repository_first_seen,
             release_date=release_date,
+            release_evidence_level=release_evidence_level,
             release_confirmed=release_confirmed,
             evaluated_at=None,
             status=ModelLifecycleStatus.SEEN.value,
@@ -114,15 +123,16 @@ class WatcherState:
         self,
         canonical_id: str,
         release_date: Optional[str] = None,
+        release_evidence_level: str = ReleaseEvidenceLevel.OBSERVED_ONLY.value,
         release_confirmed: bool = False,
         force: bool = False,
     ) -> bool:
         """Determines if a candidate model qualifies for evaluation on this run.
 
-        Separates 'new benchmark entry' from 'new model release':
-        - Existing models in SEEN or MATURE are skipped.
-        - Existing PROVISIONAL models are re-evaluated once ~7 days later.
-        - Brand new entries must have a confirmed, recent release date to trigger unsolicited evaluation.
+        Release provenance rules:
+        - CONFIRMED / TRUSTED: qualified if release_date is within 60 days.
+        - INFERRED: qualified if release_date is within 60 days (report must annotate inferred).
+        - OBSERVED_ONLY: strictly not qualified for unsolicited 'new release' alert.
         """
         if force:
             return True
@@ -134,7 +144,6 @@ class WatcherState:
             if rec.status == ModelLifecycleStatus.MATURE.value:
                 return False
             if rec.status == ModelLifecycleStatus.PROVISIONAL.value:
-                # Check if ~7 days have passed since first evaluation
                 ref_time_str = rec.evaluated_at or rec.benchmark_first_seen
                 ref_dt = parse_date(ref_time_str)
                 if ref_dt:
@@ -145,15 +154,18 @@ class WatcherState:
                 return False
             return False
 
-        # Brand new entry not yet in state:
-        # Check if release is confirmed and recent
-        if release_confirmed and release_date:
-            if is_recent_date(release_date, max_days=60):
+        # Brand new candidate entry:
+        if release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
+            if release_date and is_recent_date(release_date, max_days=60):
                 return True
-            # Older release that just appeared on benchmark: record as SEEN, don't alert
             return False
 
-        # Release date cannot be confirmed; do not guess or generate false 'new release' alert
+        if release_evidence_level == ReleaseEvidenceLevel.INFERRED.value:
+            if release_date and is_recent_date(release_date, max_days=60):
+                return True
+            return False
+
+        # OBSERVED_ONLY (HF createdAt, benchmark date, commit date): insufficient on its own
         return False
 
     def record_evaluation(
@@ -163,7 +175,9 @@ class WatcherState:
         provider: str,
         report_ref: str,
         release_date: Optional[str] = None,
+        release_evidence_level: str = ReleaseEvidenceLevel.OBSERVED_ONLY.value,
         release_confirmed: bool = False,
+        repository_first_seen: Optional[str] = None,
         evidence_hash: str = "",
     ) -> TrackedModelRecord:
         now_str = datetime.now(timezone.utc).isoformat()
@@ -177,7 +191,10 @@ class WatcherState:
             rec.re_eval_count += 1
             if release_date:
                 rec.release_date = release_date
+                rec.release_evidence_level = release_evidence_level
                 rec.release_confirmed = release_confirmed
+            if repository_first_seen:
+                rec.repository_first_seen = repository_first_seen
             return rec
         else:
             rec = TrackedModelRecord(
@@ -185,7 +202,9 @@ class WatcherState:
                 display_name=display_name,
                 provider=provider,
                 benchmark_first_seen=now_str,
+                repository_first_seen=repository_first_seen,
                 release_date=release_date,
+                release_evidence_level=release_evidence_level,
                 release_confirmed=release_confirmed,
                 evaluated_at=now_str,
                 status=ModelLifecycleStatus.PROVISIONAL.value,
@@ -235,7 +254,6 @@ def load_state(path: Path = DEFAULT_STATE_PATH) -> WatcherState:
 
 
 def save_state(state: WatcherState, path: Path = DEFAULT_STATE_PATH) -> None:
-    """Atomic write to prevent corruption during unexpected crashes."""
     state.last_run = datetime.now(timezone.utc).isoformat()
     temp_path = path.with_suffix(".tmp")
 

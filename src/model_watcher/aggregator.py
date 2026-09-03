@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import re
+import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional
 
@@ -11,8 +12,8 @@ from model_watcher.sources.harbor import HarborSource
 from model_watcher.sources.livebench import LiveBenchSource
 from model_watcher.sources.lmms_eval import LMMsEvalSource
 from model_watcher.sources.swebench import SWEBenchSource
-from model_watcher.state import WatcherState, is_recent_date
-from model_watcher.types import BenchmarkEvidence, ModelMetadata, Role
+from model_watcher.state import WatcherState
+from model_watcher.types import BenchmarkEvidence, ModelMetadata, ReleaseEvidenceLevel, Role
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,41 @@ OUT_OF_SCOPE_PATTERNS = [
     r"-0\.1b",
 ]
 
+TRUSTED_PROVIDERS = {
+    "anthropic",
+    "openai",
+    "google",
+    "meta",
+    "deepseek",
+    "mistral",
+    "qwen",
+    "alibaba",
+    "zhipu",
+    "glm",
+    "moonshot",
+    "kimi",
+    "xai",
+    "cohere",
+}
+
+KNOWN_VENDOR_PREFIXES = (
+    "claude-",
+    "gpt-",
+    "o1-",
+    "o3-",
+    "o4-",
+    "gemini-",
+    "deepseek-",
+    "qwen",
+    "glm-",
+    "grok-",
+    "llama-",
+    "mistral-",
+    "devstral-",
+)
+
 
 def is_in_tracking_scope(model: ModelMetadata) -> bool:
-    """Filter out non-LLM models: embedding, speech-only, image-gen, tiny edge."""
     name_low = model.canonical_id.lower() + " " + model.display_name.lower()
     for pat in OUT_OF_SCOPE_PATTERNS:
         if re.search(pat, name_low):
@@ -48,21 +81,36 @@ def is_in_tracking_scope(model: ModelMetadata) -> bool:
     return True
 
 
-def extract_date_from_name(name: str) -> Optional[str]:
+def is_trusted_provider(provider: Optional[str], canonical_id: str) -> bool:
+    p = (provider or "").lower()
+    cid = (canonical_id or "").lower()
+    if any(tp in p for tp in TRUSTED_PROVIDERS):
+        return True
+    if any(cid.startswith(pref) for pref in KNOWN_VENDOR_PREFIXES):
+        return True
+    return False
+
+
+def extract_date_from_name(name: Optional[str]) -> Optional[str]:
     """Extracts explicit version/release date formatted in model name."""
-    # Match YYYY-MM-DD
+    if not name:
+        return None
     m1 = re.search(r"(202[3-9])-([01][0-9])-([0-3][0-9])", name)
     if m1:
         return f"{m1.group(1)}-{m1.group(2)}-{m1.group(3)}"
-    # Match YYYYMMDD
     m2 = re.search(r"(202[3-9])([01][0-9])([0-3][0-9])", name)
     if m2:
         return f"{m2.group(1)}-{m2.group(2)}-{m2.group(3)}"
     return None
 
 
-def query_huggingface_model_card_date(model_id: str) -> Optional[str]:
-    """Fallback query to official Hugging Face Model Card API for open-weights models."""
+def query_huggingface_repository_created_at(model_id: str) -> Optional[str]:
+    """Queries official Hugging Face Hub for repo creation date.
+
+    Note per Hugging Face documentation:
+    'createdAt' reflects repository creation on Hub, NOT official model release date.
+    Saved strictly as repository_first_seen (OBSERVED_ONLY).
+    """
     clean_id = re.sub(r"-(high|medium|low|xhigh|thinking|preview|instruct|fp8|chat)$", "", model_id.lower())
     search_term = clean_id.split("-")[0] if "-" in clean_id else clean_id
     if len(search_term) < 3:
@@ -79,28 +127,38 @@ def query_huggingface_model_card_date(model_id: str) -> Optional[str]:
                 if created_at and (clean_id in item_id or item_id in clean_id):
                     return created_at[:10]
     except Exception as e:
-        logger.debug(f"HF model card query skipped for {model_id}: {e}")
+        logger.debug(f"HF model query skipped for {model_id}: {e}")
     return None
 
 
 def confirm_release_fallback(model: ModelMetadata) -> None:
-    """When AA is unavailable or lacks release date, verify via official name tags or official model cards."""
-    if model.release_confirmed and model.release_date:
+    """Classifies release evidence level: CONFIRMED, TRUSTED, INFERRED, or OBSERVED_ONLY.
+
+    - CONFIRMED / TRUSTED: already confirmed by official source or AA
+    - INFERRED: trusted provider canonical model identifier contains explicit date
+    - OBSERVED_ONLY: HF repo createdAt, benchmark submission date
+    """
+    # 1. Query HF repo createdAt as repository_first_seen (OBSERVED_ONLY evidence)
+    if not model.repository_first_seen:
+        hf_created = query_huggingface_repository_created_at(model.canonical_id)
+        if hf_created:
+            model.repository_first_seen = hf_created
+
+    # If already confirmed or trusted, keep existing high-confidence provenance
+    if model.release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
         return
 
-    # 1. Check embedded version date in model name / ID
-    date_in_name = extract_date_from_name(model.canonical_id) or extract_date_from_name(model.display_name)
-    if date_in_name:
-        model.release_date = date_in_name
-        model.release_confirmed = True
-        return
+    # 2. Check if trusted provider's canonical model ID explicitly includes version date
+    if is_trusted_provider(model.provider, model.canonical_id):
+        date_in_name = extract_date_from_name(model.canonical_id) or extract_date_from_name(model.display_name)
+        if date_in_name:
+            model.release_date = date_in_name
+            model.release_evidence_level = ReleaseEvidenceLevel.INFERRED.value
+            model.release_confirmed = False  # Inferred, not confirmed
+            return
 
-    # 2. Check official model card metadata on Hugging Face (for open-weights models)
-    hf_date = query_huggingface_model_card_date(model.canonical_id)
-    if hf_date:
-        model.release_date = hf_date
-        model.release_confirmed = True
-        return
+    # 3. Otherwise, remains OBSERVED_ONLY; do NOT fabricate release date
+    model.release_evidence_level = ReleaseEvidenceLevel.OBSERVED_ONLY.value
 
 
 class ModelAggregator:
@@ -133,13 +191,12 @@ class ModelAggregator:
                         all_models[canon_key] = m
                     else:
                         existing = all_models[canon_key]
-                        if not existing.release_confirmed and m.release_confirmed:
-                            existing.release_date = m.release_date
-                            existing.release_confirmed = m.release_confirmed
-                        elif not existing.release_date and m.release_date:
-                            existing.release_date = m.release_date
-                            existing.release_confirmed = m.release_confirmed
-
+                        # Prefer CONFIRMED/TRUSTED release provenance
+                        if existing.release_evidence_level not in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
+                            if m.release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
+                                existing.release_date = m.release_date
+                                existing.release_evidence_level = m.release_evidence_level
+                                existing.release_confirmed = m.release_confirmed
                         if not existing.input_price_per_m and m.input_price_per_m:
                             existing.input_price_per_m = m.input_price_per_m
                         if not existing.output_price_per_m and m.output_price_per_m:
@@ -150,10 +207,8 @@ class ModelAggregator:
             except Exception as e:
                 logger.warning(f"Error discovering models from {src.name}: {e}")
 
-        # Execute fallback release confirmation for candidates lacking AA release date
         for m in all_models.values():
-            if not m.release_confirmed:
-                confirm_release_fallback(m)
+            confirm_release_fallback(m)
 
         return list(all_models.values())
 
@@ -172,7 +227,9 @@ class ModelAggregator:
                     display_name=m.display_name,
                     provider=m.provider,
                     release_date=m.release_date,
+                    release_evidence_level=m.release_evidence_level,
                     release_confirmed=m.release_confirmed,
+                    repository_first_seen=m.repository_first_seen,
                 )
             return []
 
@@ -192,6 +249,7 @@ class ModelAggregator:
                     provider="Targeted Model",
                     first_seen="2026-09-03",
                     release_confirmed=True,
+                    release_evidence_level=ReleaseEvidenceLevel.CONFIRMED.value,
                     raw_source="Targeted Evaluation",
                 )
             ]
@@ -201,16 +259,20 @@ class ModelAggregator:
             if state.should_evaluate(
                 canonical_id=m.canonical_id,
                 release_date=m.release_date,
+                release_evidence_level=m.release_evidence_level,
                 release_confirmed=m.release_confirmed,
             ):
                 pending.append(m)
             elif m.canonical_id not in state.models:
+                # OBSERVED_ONLY or old release: record as SEEN, never alert
                 state.record_seen(
                     canonical_id=m.canonical_id,
                     display_name=m.display_name,
                     provider=m.provider,
                     release_date=m.release_date,
+                    release_evidence_level=m.release_evidence_level,
                     release_confirmed=m.release_confirmed,
+                    repository_first_seen=m.repository_first_seen,
                 )
 
         return pending

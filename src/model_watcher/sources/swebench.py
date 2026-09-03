@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from model_watcher.sources.base import DataSource, http_get
-from model_watcher.types import BenchmarkEvidence, ModelMetadata, Role
+from model_watcher.types import BenchmarkEvidence, ModelMetadata, ReleaseEvidenceLevel, Role
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +58,15 @@ class SWEBenchSource(DataSource):
             if not canon:
                 continue
 
+            level = ReleaseEvidenceLevel.CONFIRMED.value if model_rel_date else ReleaseEvidenceLevel.OBSERVED_ONLY.value
+
             if canon not in discovered or (resolved and resolved > (discovered[canon].headline_indices.get("swe_bench_verified") or 0)):
                 discovered[canon] = ModelMetadata(
                     canonical_id=model_display.lower().replace(" ", "-"),
                     display_name=model_display,
                     provider=model_org,
                     release_date=model_rel_date,
+                    release_evidence_level=level,
                     release_confirmed=bool(model_rel_date),
                     benchmark_first_seen=submission_date or "",
                     headline_indices={"swe_bench_verified": resolved},
@@ -96,7 +99,6 @@ class SWEBenchSource(DataSource):
         incumbent: str,
         role: Role,
     ) -> Optional[BenchmarkEvidence]:
-        # SWE-bench is strictly repo-level Coder evidence
         if role != Role.CODER:
             return None
 

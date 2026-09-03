@@ -12,7 +12,7 @@ from model_watcher.sources.livebench import LiveBenchSource
 from model_watcher.sources.lmms_eval import LMMsEvalSource
 from model_watcher.sources.swebench import SWEBenchSource
 from model_watcher.state import load_state
-from model_watcher.types import ModelMetadata, Role
+from model_watcher.types import ModelMetadata, ReleaseEvidenceLevel, Role
 
 
 class TestIntegration(unittest.TestCase):
@@ -33,7 +33,6 @@ class TestIntegration(unittest.TestCase):
         """Test Issue #1: 首次初始化 N 个已有模型 → 0 个 unsolicited reports"""
         self.assertFalse(self.state_path.exists())
 
-        # First bootstrap run without target_model
         ret = run_watcher(
             profile_path=self.profile_path,
             state_path=self.state_path,
@@ -46,11 +45,9 @@ class TestIntegration(unittest.TestCase):
         self.assertEqual(ret, 0)
         self.assertTrue(self.state_path.exists())
 
-        # State must contain all discovered models
         state = load_state(self.state_path)
         self.assertGreater(len(state.models), 50, "Bootstrap should discover existing historical models")
 
-        # Crucial check: 0 reports generated!
         report_files = list(self.reports_dir.glob("*.md"))
         self.assertEqual(len(report_files), 0, "Bootstrap must generate 0 unsolicited reports!")
 
@@ -81,11 +78,11 @@ class TestIntegration(unittest.TestCase):
             provider="TestLab",
             release_date=recent_release_date,
             release_confirmed=True,
+            release_evidence_level=ReleaseEvidenceLevel.CONFIRMED.value,
             benchmark_first_seen=datetime.now(timezone.utc).isoformat(),
             raw_source="Test",
         )
 
-        # Mock discovery by monkey-patching aggregator
         from model_watcher import cli
         real_discover = cli.ModelAggregator.discover_all_candidates
 
@@ -112,7 +109,6 @@ class TestIntegration(unittest.TestCase):
             self.assertEqual(len(new_reports), 1, "Only the single newly released candidate should produce a report")
             self.assertIn(new_model_id, new_reports[0].name)
 
-            # Verify state has N + 1 models
             updated_state = load_state(self.state_path)
             self.assertEqual(len(updated_state.models), initial_model_count + 1)
             self.assertEqual(updated_state.models[new_model_id].status, "PROVISIONAL")
@@ -122,10 +118,8 @@ class TestIntegration(unittest.TestCase):
     def test_multimodal_audit_no_hardcoded_scores(self):
         """Test Issue #2: LMMs-Eval 数据审计，禁止静态分数表，缺失返回 ? Insufficient evidence"""
         source = LMMsEvalSource()
-        # Verify no hardcoded dictionary attribute exists on class
         self.assertFalse(hasattr(source, "MULTIMODAL_REFERENCE_BENCHMARKS"), "Static score table must be removed")
 
-        # get_evidence must return None without live machine-readable endpoint
         ev = source.get_evidence("gemini-2.5-pro", "claude-3-7-sonnet", Role.MULTIMODAL)
         self.assertIsNone(ev, "LMMs-Eval must return None when no verified live results file exists")
 
@@ -141,7 +135,6 @@ class TestIntegration(unittest.TestCase):
             quiet_on_empty=False,
         )
         self.assertEqual(ret, 0)
-        # 1 targeted report generated
         report_files = list(self.reports_dir.glob("*.md"))
         self.assertEqual(len(report_files), 1)
 

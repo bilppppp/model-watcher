@@ -1,10 +1,15 @@
-"""Report generation formatting crisp 30-second markdown briefings."""
+"""Markdown 30-second actionable report formatter."""
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-from typing import List
+from typing import Dict
 
-from model_watcher.types import EvaluationReport, ReplaceVerdict, Role
+from model_watcher.types import (
+    CapabilityVerdict,
+    EvaluationReport,
+    ReleaseEvidenceLevel,
+    Role,
+)
 
 
 class MarkdownReporter:
@@ -13,81 +18,92 @@ class MarkdownReporter:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
     def format_report(self, report: EvaluationReport) -> str:
-        model_name = report.model.display_name or report.model.canonical_id
         lines = []
 
-        lines.append(f"# 🆕 {model_name}\n")
+        # 1. Headline
+        lines.append(f"# 🆕 {report.model.display_name}\n")
         lines.append(f"**结论：** {report.overall_verdict}")
-        lines.append(f"**本次改变：{report.routes_changed}/{report.total_routes} 个当前模型路由**\n")
+        lines.append(f"**本次改变：{report.routes_changed}/{report.total_routes} 个当前模型路由**")
 
+        # Provenance line
+        if report.model.release_evidence_level == ReleaseEvidenceLevel.INFERRED.value:
+            lines.append(f"**发布日期：** {report.model.release_date or '未知'} *(INFERRED: 推断自厂商标准模型版本标识，非官方直接确证)*")
+        elif report.model.release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
+            lines.append(f"**发布日期：** {report.model.release_date} *({report.model.release_evidence_level}: 官方或高可信来源确证)*")
+        elif report.model.repository_first_seen:
+            lines.append(f"**Hub 仓库时间：** {report.model.repository_first_seen} *(OBSERVED_ONLY: 仓库创建时间，非官方正式发布日期)*")
+
+        lines.append("")
+
+        # 0/7 routes disclaimer
         if report.routes_changed == 0:
             lines.append("> 已完成评估，没有任何维度足以改变当前模型组合，可以忽略这次发布。\n")
 
-        # Table of 7 roles
+        # 2. 7-role Comparison Table
         lines.append("| Role | Current | Challenger | Capability | Replace? |")
         lines.append("|---|---|---|---|---|")
         for role in Role:
-            ev = report.role_evaluations.get(role)
-            if ev:
-                lines.append(f"| {role.display_name} | {ev.incumbent_model} | {ev.challenger_model} | {ev.capability.value} | {ev.replace.value} |")
+            reval = report.role_evaluations.get(role)
+            if reval:
+                cap_val = reval.capability.value
+                rep_val = reval.replace.value
+                inc_val = reval.incumbent_model
             else:
-                lines.append(f"| {role.display_name} | - | {model_name} | ? Insufficient evidence | No |")
+                cap_val = CapabilityVerdict.INSUFFICIENT_EVIDENCE.value
+                rep_val = "No"
+                inc_val = "Unknown"
+
+            lines.append(f"| {role.display_name} | {inc_val} | {report.model.display_name} | {cap_val} | {rep_val} |")
         lines.append("")
 
-        # 建议调整
+        # 3. Suggested Adjustments
         lines.append("## 建议调整\n")
-        replacements = [ev for ev in report.role_evaluations.values() if ev.replace == ReplaceVerdict.YES]
-        if replacements:
-            for rep in replacements:
-                lines.append(f"{rep.role.display_name}:")
-                lines.append(f"{rep.incumbent_model} → {rep.challenger_model}\n")
+        if report.suggested_adjustments:
+            for adj in report.suggested_adjustments:
+                lines.append(f"- {adj}")
         else:
-            lines.append("无路由调整建议。当前组合保持最优。\n")
+            lines.append("无路由调整建议。当前组合保持最优。")
+        lines.append("")
 
-        # 保持不动
+        # 4. Kept Incumbents
         lines.append("## 保持不动\n")
-        non_replacements = [ev for ev in report.role_evaluations.values() if ev.replace == ReplaceVerdict.NO]
-        if non_replacements:
-            for ev in non_replacements:
-                lines.append(f"- **{ev.role.display_name} ({ev.incumbent_model})**: {ev.replace_rationale}")
-            lines.append("")
+        if report.kept_incumbents:
+            for k in report.kept_incumbents:
+                lines.append(f"- {k}")
         else:
-            lines.append("所有主要路由均建议切换。\n")
+            lines.append("- 全部角色发生调整。")
+        lines.append("")
 
-        # 新用途
+        # 5. New Use Cases
         lines.append("## 新用途\n")
         if report.new_use_cases:
             for u in report.new_use_cases:
                 lines.append(f"- {u}")
-            lines.append("")
         else:
-            lines.append("- 暂无额外专有角色建议。\n")
+            lines.append("- 暂无额外专有角色建议。")
+        lines.append("")
 
-        # 最值得知道的一点
+        # 6. Key Takeaway
         lines.append("## 最值得知道的一点\n")
-        lines.append(f"{report.key_takeaway}\n")
+        lines.append(report.key_takeaway or "本次发布对当前模型工作流分工无实质性影响。")
+        lines.append("")
 
-        # Evidence / Confidence
+        # 7. Evidence / Confidence
         lines.append("## Evidence / Confidence\n")
         if report.evidence_ledger:
-            seen = set()
-            for e in report.evidence_ledger:
-                key = f"{e.source}_{e.benchmark}"
-                if key in seen:
-                    continue
-                seen.add(key)
-
-                score_str = f"Challenger: {e.score_challenger}{e.display_metric}" if e.score_challenger is not None else "N/A"
-                if e.score_incumbent is not None:
-                    score_str += f" vs Incumbent: {e.score_incumbent}{e.display_metric}"
-
-                lines.append(f"- **Source:** {e.source} | **Benchmark:** {e.benchmark} ({e.version})")
-                lines.append(f"  - **Score:** {score_str}")
-                lines.append(f"  - **Harness:** {e.harness}")
-                lines.append(f"  - **URL:** {e.url}")
-                lines.append(f"  - **Confidence:** {int(e.confidence * 100)}%")
-                if e.known_uncertainty:
-                    lines.append(f"  - **Uncertainty:** {e.known_uncertainty}")
+            for ev in report.evidence_ledger:
+                lines.append(f"- **Source:** {ev.source} | **Benchmark:** {ev.benchmark} ({ev.version})")
+                challenger_score_str = f"{ev.score_challenger}{ev.display_metric}" if ev.score_challenger is not None else "N/A"
+                if ev.score_incumbent is not None:
+                    incumbent_score_str = f" vs Incumbent: {ev.score_incumbent}{ev.display_metric}"
+                else:
+                    incumbent_score_str = ""
+                lines.append(f"  - **Score:** Challenger: {challenger_score_str}{incumbent_score_str}")
+                lines.append(f"  - **Harness:** {ev.harness}")
+                lines.append(f"  - **URL:** {ev.url}")
+                lines.append(f"  - **Confidence:** {int(ev.confidence * 100)}%")
+                if ev.known_uncertainty:
+                    lines.append(f"  - **Uncertainty:** {ev.known_uncertainty}")
                 lines.append("")
         else:
             lines.append("- 缺乏独立公开的标准化基准测试分数；暂无高置信度核心证据。\n")
@@ -96,14 +112,12 @@ class MarkdownReporter:
 
     def save_report(self, report: EvaluationReport) -> Path:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        safe_id = report.model.canonical_id.lower().replace("/", "-").replace(":", "-")
-        filename = f"{date_str}_{safe_id}.md"
-        path = self.reports_dir / filename
+        safe_model_id = report.model.canonical_id.replace("/", "_").replace(":", "_")
+        filename = f"{date_str}_{safe_model_id}.md"
+        out_path = self.reports_dir / filename
 
         content = self.format_report(report)
-        temp_path = path.with_suffix(".tmp")
-        with open(temp_path, "w", encoding="utf-8") as f:
+        with open(out_path, "w", encoding="utf-8") as f:
             f.write(content)
-        os.replace(temp_path, path)
 
-        return path
+        return out_path

@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from model_watcher.sources.base import DataSource, http_get_json
-from model_watcher.types import BenchmarkEvidence, ModelMetadata, Role
+from model_watcher.types import BenchmarkEvidence, ModelMetadata, ReleaseEvidenceLevel, Role
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class ArtificialAnalysisSource(DataSource):
                 display_name=name,
                 provider=creator,
                 release_date=rel_date,
+                release_evidence_level=ReleaseEvidenceLevel.TRUSTED.value if rel_date else ReleaseEvidenceLevel.OBSERVED_ONLY.value,
                 release_confirmed=bool(rel_date),
                 benchmark_first_seen=rel_date or "",
                 input_price_per_m=pricing.get("price_1m_input_tokens"),
