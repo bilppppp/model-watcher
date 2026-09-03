@@ -1,0 +1,75 @@
+version: "1.0"
+priority_hierarchy:
+  P0: "Official Benchmark machine-readable results (SWE-bench, LiveBench, Harbor Hub)"
+  P1: "Independent standardized benchmarks (Artificial Analysis API v2)"
+  P2: "Model creator official model card / release notes"
+  P3: "Reproducible 3rd-party evaluations"
+  P4: "Trusted community production feedback"
+  P5: "Media / secondary information"
+
+sources:
+  artificial_analysis:
+    name: "Artificial Analysis"
+    type: "api"
+    base_url: "https://artificialanalysis.ai/api/v2"
+    free_endpoint: "/language/models/free"
+    auth_header: "x-api-key"
+    env_var: "ARTIFICIAL_ANALYSIS_API_KEY"
+    docs_url: "https://artificialanalysis.ai/data-api/docs"
+    roles_supported:
+      - reasoner
+      - coder
+      - agent
+    metadata_fields:
+      - release_date
+      - model_creator
+      - pricing
+      - performance
+      - artificial_analysis_intelligence_index
+      - artificial_analysis_coding_index
+      - artificial_analysis_agentic_index
+
+  harbor_hub:
+    name: "Harbor Hub"
+    type: "cli_api"
+    command_prefix: ["harbor", "hub", "leaderboard"]
+    registry_url: "https://hub.harborframework.com/datasets"
+    default_boards:
+      - "terminal-bench"
+      - "swe-bench-verified"
+      - "orca-bench"
+    roles_supported:
+      - agent
+      - coder
+
+  livebench:
+    name: "LiveBench"
+    type: "repo_raw"
+    repo: "LiveBench/new-livebench"
+    branch: "main"
+    public_path: "public"
+    file_patterns:
+      table: "table_{date}.csv"
+      categories: "categories_{date}.json"
+      cost: "cost_{date}.csv"
+    roles_supported:
+      - reasoner
+      - coder
+      - analyst
+      - agent
+
+  swe_bench:
+    name: "SWE-bench"
+    type: "repo_raw"
+    repo: "SWE-bench/swe-bench.github.io"
+    branch: "master"
+    data_path: "data/leaderboards.json"
+    roles_supported:
+      - coder
+
+  lmms_eval:
+    name: "LMMs-Eval"
+    type: "repo_reference"
+    repo: "EvolvingLMMs-Lab/lmms-eval"
+    roles_supported:
+      - multimodal

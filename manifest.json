@@ -1,0 +1,25 @@
+{
+  "name": "model-watcher",
+  "version": "1.0.0",
+  "description": "Autonomous frontier AI model monitor for 7-role workflow routing against incumbents using machine-readable benchmarks.",
+  "status": "active",
+  "entrypoint": "SKILL.md",
+  "category": "ai-models",
+  "roles_supported": [
+    "coder",
+    "planner",
+    "reviewer",
+    "reasoner",
+    "analyst",
+    "agent",
+    "multimodal"
+  ],
+  "data_sources": [
+    "livebench",
+    "swe_bench",
+    "harbor_hub",
+    "artificial_analysis",
+    "lmms_eval"
+  ],
+  "output_contract": "30-second markdown briefings in reports/ with explicit route migration proposals."
+}

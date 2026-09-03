@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Mac & Editor files
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Temporary files & backups
+*.tmp
+*.bak
+*.corrupted.bak
+
+# Secrets & Local credentials
+.env
+.env.*
+!profile.yaml.example
+
+# Symlinks for local runtime discovery
+.agents/

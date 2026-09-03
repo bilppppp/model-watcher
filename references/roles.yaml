@@ -1,0 +1,101 @@
+version: "1.0"
+roles:
+  coder:
+    display_name: "Coder / Builder"
+    tasks:
+      - repo coding
+      - implementation
+      - issue fixing
+      - debugging
+    evidence_types:
+      - SWE-bench Verified
+      - DeepSWE
+      - Repo coding benchmarks
+      - LiveBench Coding
+    min_confidence_threshold: 0.65
+
+  planner:
+    display_name: "Planner"
+    tasks:
+      - architecture
+      - task decomposition
+      - long-horizon planning
+      - orchestration
+    evidence_types:
+      - Long-horizon agent benchmarks
+      - Complex orchestration evals
+      - Multi-step workflow benchmarks
+    min_confidence_threshold: 0.60
+
+  reviewer:
+    display_name: "Reviewer"
+    tasks:
+      - code review
+      - bug finding
+      - adversarial review
+      - incorrect assumptions
+    evidence_types:
+      - Dedicated code review benchmarks
+      - Critic / bug finding evals
+      - Adversarial robustness tests
+    strict_evidence: true
+    default_on_missing: "? Insufficient evidence"
+    min_confidence_threshold: 0.70
+
+  reasoner:
+    display_name: "Reasoner"
+    tasks:
+      - logic
+      - mathematics
+      - algorithms
+      - scientific / difficult reasoning
+    evidence_types:
+      - LiveBench Reasoning
+      - LiveBench Mathematics
+      - HLE / GPQA
+    min_confidence_threshold: 0.65
+
+  analyst:
+    display_name: "Analyst / Researcher"
+    tasks:
+      - research
+      - knowledge work
+      - synthesis
+      - documents / data
+      - professional reports
+    evidence_types:
+      - LiveBench Data Analysis
+      - GDPVal-style knowledge work
+      - Synthesis evals
+    min_confidence_threshold: 0.60
+
+  agent:
+    display_name: "Agent / Computer-use"
+    tasks:
+      - terminal
+      - tools
+      - autonomous execution
+      - long workflows
+      - error recovery
+      - GUI / browser / computer use
+    evidence_types:
+      - Terminal-Bench (2.0 / 4.0 / 2.1 via Harbor Hub)
+      - Harbor agent benchmarks
+      - LiveBench Agentic Coding
+      - OS / tool-use benchmarks
+    min_confidence_threshold: 0.65
+
+  multimodal:
+    display_name: "Multimodal"
+    tasks:
+      - images
+      - PDFs
+      - charts
+      - video
+      - mixed media
+    evidence_types:
+      - MMMU / MMMU-Pro
+      - MathVista / ChartQA
+      - LMMs-Eval suites
+      - Official multimodal model cards
+    min_confidence_threshold: 0.60

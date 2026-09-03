@@ -1,0 +1,19 @@
+[project]
+name = "model-watcher"
+version = "1.0.0"
+description = "Model Watcher - Continuous Frontier AI Model Routing Monitor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0.2",
+]
+
+[project.scripts]
+model-watcher = "model_watcher.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/model_watcher"]

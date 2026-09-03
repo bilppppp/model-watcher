@@ -1,0 +1,48 @@
+version: "1.0"
+user:
+  name: "User"
+  accessible_models:
+    - "claude-3-7-sonnet"
+    - "claude-opus-4-6"
+    - "gpt-4o"
+    - "o3-mini"
+    - "gemini-2.5-pro"
+    - "deepseek-v3"
+  constraints:
+    cost_sensitive: true
+    allow_subagents_cheap_models: true
+    preferred_providers:
+      - "anthropic"
+      - "openai"
+      - "google"
+    monthly_budget_usd: null
+
+baseline_routing:
+  coder:
+    primary: "claude-3-7-sonnet"
+    fallback: "gpt-4o"
+    notes: "Repo coding, debugging and issue fixing"
+  planner:
+    primary: "claude-3-7-sonnet"
+    fallback: "o3-mini"
+    notes: "Architecture, task decomposition and orchestration"
+  reviewer:
+    primary: "claude-3-7-sonnet"
+    fallback: "o3-mini"
+    notes: "Adversarial code review and bug finding"
+  reasoner:
+    primary: "o3-mini"
+    fallback: "claude-3-7-sonnet"
+    notes: "Math, logic, algorithms, scientific reasoning"
+  analyst:
+    primary: "claude-3-7-sonnet"
+    fallback: "gemini-2.5-pro"
+    notes: "Research synthesis, documentation and reporting"
+  agent:
+    primary: "claude-3-7-sonnet"
+    fallback: "gpt-4o"
+    notes: "Terminal execution, tool calling and autonomous workflows"
+  multimodal:
+    primary: "gemini-2.5-pro"
+    fallback: "claude-3-7-sonnet"
+    notes: "Image, chart, PDF and mixed media understanding"
