@@ -111,10 +111,53 @@ Capability superiority and replacement recommendation are strictly separated. Ma
 - Verified margin size
 - Evidence reliability and harness comparability
 - Token pricing, latency, context limits
-- User access / subscription constraints
 - Switching overhead and workflow risk
+*(Note: User access / subscription constraints are evaluated and displayed independently via "当前可用性", and do not block a Replace: Yes verdict).*
 
 Models with comparable capability but 10x lower cost are suggested as **cheap background workers / subagents**, while retaining the stronger model as primary.
+
+---
+
+## Report Presentation & Decision Readability Policy
+
+> **Core Principle**: “有答案的内容成为主体；没有答案的角色透明披露，但不得淹没真正的决策信息。”
+
+When presenting Model Watcher findings or summarizing reports to the user, Agents MUST strictly adhere to the following decision-first presentation rules:
+
+### 1. Top 20 Lines Directly Answer the User's Questions
+The opening lines of the report/presentation must immediately tell the user:
+- **这个新模型值得换吗？**（结论：建议加入 / 部分替换 / 值得关注，暂不调整 / 可以忽略）
+- **建议调整：** X 个角色
+- **有效评估：** Y/7 个角色（基于真实可比证据已完成判定的角色数，绝不给用户造成全部 7 角色均已评估的错觉）
+- **当前可用性：** 已配置 / 未配置（未列入当前 Calibration）
+- **当前校准基线：** Revision N
+
+### 2. “一眼看懂” (At a Glance)
+Immediately following the headline/table, provide a high-signal executive summary:
+- **上限 3~5 条**：只写真正影响决策的实质性发现（如建议替换项、显著领先但受限于非直接基准的暂缓项、极低成本子工推荐等）。
+- **绝不填充未评估项**：`暂未判断` / `证据不足` 的角色严禁占据“一眼看懂”。
+- **无新信号写一句明确结论**：如果没有值得关注的新发现，直接输出单句定论（如“评估完成：没有发现足以改变当前工作流的信号，可以安全忽略本次发布。”），切忌硬凑 3~5 条废话。
+
+### 3. 三类结果语义严格区分
+- **建议调整 (Replace == Yes)**：现有证据足以支持该模型成为这一角色的更优主力。当前是否已配置作为独立的获取条件展示，不得因为“未配置”将 Replace Yes 改写为 No。
+- **明确保留 (已评估，Replace == No)**：已有充分的同环境可比证据，但领先幅度微弱（<1.5%）、落后或受限于 Composite Index 不确定性，明确建议保留当前主力。
+- **暂未判断 (Capability == Insufficient Evidence)**：明确表述为“本次暂无可靠直接证据判断该角色，不据此做出任何路由调整。”
+  > [!IMPORTANT]
+  > **严禁将“证据不足”描述为“已经证明应该保留当前模型”**。没有证据就是没有证据，不能伪造成保留的积极理由。
+
+### 4. 有效评估结果优先展示
+- 核心决策表格只展示完成了有效评估的角色：
+  `| 角色 | 当前模型 | 能力判断 | 建议 |`
+- 建议列使用简明自然语言：`建议替换`、`保留`、`暂不切换，继续观察`。
+- 因整份报告针对同一候选模型，表格中无需每行重复候选模型名称。
+
+### 5. 暂未判断透明披露并降低视觉权重
+- 缺乏证据的角色（如当前缺乏公开直接评测的规划、审查、多模态）统一放置在后部的 `## 暂未判断` 章节。
+- 简明说明各自的数据缺失原因（例如：审查角色严格遵循 Reviewer Golden Rule，不以纯编码或推理指标推断），不遮掩缺失，但严禁在主表中连续输出 3~4 行 `? 证据不足` 制造视觉污染。
+
+### 6. “保持不动”避免同质化模板
+- 避免机械式逐行重复“角色 X：保留 xxx（……）”。
+- 遇到多个角色因同类原因保留时，进行归纳合并（例如：“编码与推理：保留当前主力（候选模型在对应基准上无显著优势）”），直接突出核心决策依据。
 
 ---
 

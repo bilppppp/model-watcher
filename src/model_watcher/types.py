@@ -130,6 +130,20 @@ class EvaluationReport:
     baseline_calibrated_at: str = ""
     is_accessible: bool = True
 
+    @property
+    def effective_routes_evaluated(self) -> int:
+        return sum(
+            1 for ev in self.role_evaluations.values()
+            if ev.capability != CapabilityVerdict.INSUFFICIENT_EVIDENCE
+        )
+
+    @property
+    def unevaluated_roles(self) -> List[RoleEvaluation]:
+        return [
+            ev for ev in self.role_evaluations.values()
+            if ev.capability == CapabilityVerdict.INSUFFICIENT_EVIDENCE
+        ]
+
 
 class ModelNotFoundError(Exception):
     """Raised when a specified model cannot be resolved in any structured source."""

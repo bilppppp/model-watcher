@@ -46,7 +46,8 @@ class TestReporter(unittest.TestCase):
         md = self.reporter.format_report(report)
 
         self.assertIn("# 🆕 GPT-Test", md)
-        self.assertIn("本次改变：0/7 个当前模型路由", md)
+        self.assertIn("**建议调整：** 0 个角色", md)
+        self.assertIn("**有效评估：** 7/7 个角色", md)
         self.assertIn("> 没有发现足以改变当前工作流的信号，可以忽略本次发布。", md)
         self.assertIn("## 保持不动", md)
         self.assertIn("## 证据 / 置信度", md)
@@ -84,7 +85,7 @@ class TestReporter(unittest.TestCase):
 
         self.assertIn("来源：** SWE-bench", md)
         self.assertIn("基准：** SWE-bench Verified", md)
-        self.assertIn("得分：** Challenger: 89.5% vs Incumbent: 80.2%", md)
+        self.assertIn("得分：** 候选模型: 89.5% vs 当前模型: 80.2%", md)
         self.assertIn("评测环境：** SWE-agent-harness", md)
         self.assertIn("URL：** https://www.swebench.com/results", md)
         self.assertIn("置信度：** 90%", md)
@@ -212,22 +213,20 @@ class TestReporter(unittest.TestCase):
         md = self.reporter.format_report(report)
 
         # 1. Chinese Table headers
-        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("| 角色 | 当前模型 | 能力判断 | 建议 |", md)
         self.assertIn("**当前可用性：** 未配置（未列入当前 Calibration）", md)
-        # 2. Chinese Role display names
-        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-5-Mini |", md)
-        self.assertIn("| 规划 |", md)
-        self.assertIn("| 审查 |", md)
-        self.assertIn("| 推理 |", md)
-        self.assertIn("| 分析 / 研究 |", md)
-        self.assertIn("| Agent / 工具执行 |", md)
-        self.assertIn("| 多模态 |", md)
-        # 3. Chinese Capability display
+        # 2. Chinese Role display names in table and unevaluated section
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | ↑ 明显更强 | 建议替换 |", md)
+        self.assertIn("## 暂未判断", md)
+        self.assertIn("规划", md)
+        self.assertIn("审查", md)
+        self.assertIn("推理", md)
+        self.assertIn("分析 / 研究", md)
+        self.assertIn("Agent / 工具执行", md)
+        self.assertIn("多模态", md)
+        # 3. Chinese Capability & Recommendation display
         self.assertIn("↑ 明显更强", md)
-        self.assertIn("? 证据不足", md)
-        # 4. Chinese Replace display
-        self.assertIn("| 是 |", md)
-        self.assertIn("| 否 |", md)
+        self.assertIn("建议替换", md)
         # 5. Baseline Calibration
         self.assertIn("当前校准基线：", md)
         self.assertIn("Revision", md)
@@ -330,12 +329,14 @@ class TestReporter(unittest.TestCase):
 
         # Header labels
         self.assertIn("**结论：**", md)
-        self.assertIn("**本次改变：", md)
+        self.assertIn("**建议调整：**", md)
+        self.assertIn("**有效评估：**", md)
         self.assertIn("**当前可用性：**", md)
         self.assertIn("**当前校准基线：**", md)
 
         # Table header
-        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("| 角色 | 当前模型 | 能力判断 | 建议 |", md)
+        self.assertIn("## 暂未判断", md)
 
         # Section labels
         self.assertIn("## 建议调整", md)

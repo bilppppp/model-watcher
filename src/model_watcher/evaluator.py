@@ -251,7 +251,7 @@ class ModelEvaluator:
 
             if ev.replace == ReplaceVerdict.YES:
                 suggested_adjustments.append(f"{role.display_name}：{ev.incumbent_model} → {ev.challenger_model}")
-            else:
+            elif ev.capability != CapabilityVerdict.INSUFFICIENT_EVIDENCE:
                 kept_incumbents.append(f"{role.display_name}：保留 {ev.incumbent_model}（{ev.replace_rationale}）")
 
         # Check for new specialist / worker use cases

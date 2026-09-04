@@ -56,7 +56,8 @@ class MarkdownReporter:
         # 1. Headline
         lines.append(f"# 🆕 {report.model.display_name}\n")
         lines.append(f"**结论：** {report.overall_verdict}")
-        lines.append(f"**本次改变：{report.routes_changed}/{report.total_routes} 个当前模型路由**")
+        lines.append(f"**建议调整：** {report.routes_changed} 个角色")
+        lines.append(f"**有效评估：** {report.effective_routes_evaluated}/{report.total_routes} 个角色")
         acc_str = "已配置" if getattr(report, "is_accessible", True) else "未配置（未列入当前 Calibration）"
         lines.append(f"**当前可用性：** {acc_str}")
 
@@ -78,22 +79,27 @@ class MarkdownReporter:
             else:
                 lines.append("> 没有发现足以改变当前工作流的信号，可以忽略本次发布。\n")
 
-        # 2. 7-role Comparison Table
-        lines.append("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |")
-        lines.append("|---|---|---|---|---|")
-        for role in Role:
-            reval = report.role_evaluations.get(role)
-            if reval:
-                cap_val = get_capability_cn(reval.capability)
-                rep_val = get_replace_cn(reval.replace)
-                inc_val = reval.incumbent_model
-            else:
-                cap_val = CAPABILITY_CN_MAP[CapabilityVerdict.INSUFFICIENT_EVIDENCE]
-                rep_val = REPLACE_CN_MAP[ReplaceVerdict.NO]
-                inc_val = "未知"
+        # 2. Main Comparison Table (Prioritize evaluated roles)
+        evaluated_roles = [
+            (role, report.role_evaluations[role])
+            for role in Role
+            if role in report.role_evaluations and report.role_evaluations[role].capability != CapabilityVerdict.INSUFFICIENT_EVIDENCE
+        ]
 
-            lines.append(f"| {role.display_name} | {inc_val} | {report.model.display_name} | {cap_val} | {rep_val} |")
-        lines.append("")
+        if evaluated_roles:
+            lines.append("| 角色 | 当前模型 | 能力判断 | 建议 |")
+            lines.append("|---|---|---|---|")
+            for role, reval in evaluated_roles:
+                cap_val = get_capability_cn(reval.capability)
+                if reval.replace == ReplaceVerdict.YES:
+                    rec_str = "建议替换"
+                elif reval.capability in (CapabilityVerdict.CLEARLY_BETTER, CapabilityVerdict.PROBABLY_BETTER):
+                    rec_str = "暂不切换，继续观察"
+                else:
+                    rec_str = "保留"
+                inc_val = reval.incumbent_model
+                lines.append(f"| {role.display_name} | {inc_val} | {cap_val} | {rec_str} |")
+            lines.append("")
 
         # 3. Suggested Adjustments
         lines.append("## 建议调整\n")
@@ -111,16 +117,39 @@ class MarkdownReporter:
             lines.append("暂无足够证据支持调整当前路由。")
         lines.append("")
 
-        # 4. Kept Incumbents
+        # 4. Kept Incumbents (Only evaluated kept roles)
         lines.append("## 保持不动\n")
         if report.kept_incumbents:
             for k in report.kept_incumbents:
                 lines.append(f"- {k}")
         else:
-            lines.append("- 全部角色发生调整。")
+            if report.routes_changed > 0:
+                lines.append("- 本次有效评估的角色均建议调整。")
+            else:
+                lines.append("- 暂无明确保留的有效评估角色。")
         lines.append("")
 
-        # 5. New Use Cases
+        # 5. Unevaluated Roles (Insufficient Evidence)
+        unevaluated_roles = [
+            (role, report.role_evaluations.get(role))
+            for role in Role
+            if role not in report.role_evaluations or report.role_evaluations[role].capability == CapabilityVerdict.INSUFFICIENT_EVIDENCE
+        ]
+        if unevaluated_roles:
+            lines.append("## 暂未判断\n")
+            role_names = "、".join([r.display_name for r, _ in unevaluated_roles])
+            lines.append(f"{role_names}目前缺少可靠的直接可比数据，本次不据此做路由判断。\n")
+            for role, reval in unevaluated_roles:
+                inc_str = f"（当前模型：{reval.incumbent_model}）" if reval and reval.incumbent_model else ""
+                reason = "缺少直接的代码审查与缺陷挖掘评测证据（遵循 Reviewer 严格准则，不以纯编码或推理指标替代）" if role == Role.REVIEWER else (
+                    "缺少可靠的长程架构规划与复杂任务编排基准证据" if role == Role.PLANNER else (
+                        "缺少同环境下的标准化直接可比多模态基准证据" if role == Role.MULTIMODAL else "缺少可靠的直接可比基准证据"
+                    )
+                )
+                lines.append(f"- **{role.display_name}**{inc_str}：{reason}")
+            lines.append("")
+
+        # 6. New Use Cases
         lines.append("## 新用途\n")
         if report.new_use_cases:
             for u in report.new_use_cases:
@@ -129,22 +158,22 @@ class MarkdownReporter:
             lines.append("- 暂无额外专有角色建议。")
         lines.append("")
 
-        # 6. Key Takeaway
+        # 7. Key Takeaway
         lines.append("## 最值得知道的一点\n")
         lines.append(report.key_takeaway or "本次发布对当前模型工作流分工无实质性影响。")
         lines.append("")
 
-        # 7. Evidence / Confidence
+        # 8. Evidence / Confidence
         lines.append("## 证据 / 置信度\n")
         if report.evidence_ledger:
             for ev in report.evidence_ledger:
                 lines.append(f"- **来源：** {ev.source} | **基准：** {ev.benchmark} ({ev.version})")
                 challenger_score_str = f"{ev.score_challenger}{ev.display_metric}" if ev.score_challenger is not None else "N/A"
                 if ev.score_incumbent is not None:
-                    incumbent_score_str = f" vs Incumbent: {ev.score_incumbent}{ev.display_metric}"
+                    incumbent_score_str = f" vs 当前模型: {ev.score_incumbent}{ev.display_metric}"
                 else:
                     incumbent_score_str = ""
-                lines.append(f"  - **得分：** Challenger: {challenger_score_str}{incumbent_score_str}")
+                lines.append(f"  - **得分：** 候选模型: {challenger_score_str}{incumbent_score_str}")
                 lines.append(f"  - **评测环境：** {ev.harness}")
                 lines.append(f"  - **URL：** {ev.url}")
                 lines.append(f"  - **置信度：** {int(ev.confidence * 100)}%")

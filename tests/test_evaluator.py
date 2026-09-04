@@ -133,8 +133,8 @@ class TestEvaluator(unittest.TestCase):
         md = reporter.format_report(report)
 
         self.assertIn("**当前可用性：** 未配置（未列入当前 Calibration）", md)
-        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
-        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | Inaccessible Strong Model | ↑ 明显更强 | 是 |", md)
+        self.assertIn("| 角色 | 当前模型 | 能力判断 | 建议 |", md)
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | ↑ 明显更强 | 建议替换 |", md)
         self.assertIn("该模型尚未列入当前 Calibration 的可用模型，若需要新增订阅/API，请结合价格", md)
 
     def test_probably_better_inaccessible_triggers_replace_no(self):
@@ -198,8 +198,8 @@ class TestEvaluator(unittest.TestCase):
         md = reporter.format_report(report)
 
         self.assertIn("**当前可用性：** 已配置", md)
-        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
-        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-4o | ↑ 明显更强 | 是 |", md)
+        self.assertIn("| 角色 | 当前模型 | 能力判断 | 建议 |", md)
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | ↑ 明显更强 | 建议替换 |", md)
 
     def test_accessibility_does_not_alter_capability_verdict(self):
         """accessibility 不得改变 Capability Verdict"""
