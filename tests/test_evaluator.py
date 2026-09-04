@@ -295,6 +295,32 @@ class TestEvaluator(unittest.TestCase):
         report_comp = self.evaluator.build_report(challenger, {Role.CODER: res_comp})
         self.assertNotIn("针对高难代码难题的专有构建模型", report_comp.new_use_cases)
 
+    def test_primary_evidence_bilateral_selection_priority(self):
+        """Regression P0: Bilateral complete evidence must be chosen over unilateral higher-confidence evidence."""
+        challenger = ModelMetadata(canonical_id="model-p0", display_name="Model P0", provider="Org")
+        ev_a = BenchmarkEvidence(
+            source="LiveBench",
+            benchmark="LiveBench (Coding)",
+            version="2026_06_25",
+            score_challenger=92.0,
+            score_incumbent=None,
+            confidence=0.85,
+        )
+        ev_b = BenchmarkEvidence(
+            source="SWE-bench",
+            benchmark="SWE-bench Verified",
+            version="v1",
+            score_challenger=75.0,
+            score_incumbent=65.0,
+            confidence=0.80,
+        )
+
+        res = self.evaluator.evaluate_role(Role.CODER, challenger, [ev_a, ev_b])
+        # Must pick Evidence B
+        self.assertEqual(res.primary_evidence.benchmark, "SWE-bench Verified")
+        self.assertEqual(res.capability, CapabilityVerdict.CLEARLY_BETTER)
+        self.assertNotEqual(res.capability, CapabilityVerdict.INSUFFICIENT_EVIDENCE)
+
 
 if __name__ == "__main__":
     unittest.main()

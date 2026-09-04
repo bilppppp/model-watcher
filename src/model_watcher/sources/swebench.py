@@ -50,10 +50,23 @@ class SWEBenchSource(DataSource):
             self._verified_results = []
             _GLOBAL_SWEBENCH_RESULTS = []
 
+    @staticmethod
+    def _is_ensemble_entry(r: Dict[str, Any]) -> bool:
+        display = (r.get("model_display") or "").strip().lower()
+        if display in ("multiple", "ensemble", "various", "multi-agent") or display.startswith("multiple"):
+            return True
+        tags = r.get("tags", [])
+        model_tags = [t for t in tags if t.lower().startswith("model:")]
+        if len(model_tags) > 1:
+            return True
+        return False
+
     def discover_models(self) -> List[ModelMetadata]:
         self._load_data()
         discovered = {}
         for r in self._verified_results or []:
+            if self._is_ensemble_entry(r):
+                continue
             model_display = r.get("model_display") or r.get("name", "")
             model_org = r.get("model_org", "Unknown")
             resolved = r.get("resolved")
@@ -62,7 +75,7 @@ class SWEBenchSource(DataSource):
             submission_date = r.get("date")
 
             canon = _normalize_name(model_display)
-            if not canon:
+            if not canon or canon == "multiple":
                 continue
 
             level = ReleaseEvidenceLevel.CONFIRMED.value if model_rel_date else ReleaseEvidenceLevel.OBSERVED_ONLY.value
@@ -84,20 +97,47 @@ class SWEBenchSource(DataSource):
 
     def _find_best_result(self, model_name: str) -> Optional[Dict[str, Any]]:
         norm_target = _normalize_name(model_name)
+        if not norm_target:
+            return None
+
         best = None
         best_score = -1.0
 
         for r in self._verified_results or []:
-            name = r.get("model_display") or r.get("name", "")
-            tags = " ".join(r.get("tags", []))
-            combined = f"{name} {tags}"
-            norm_combined = _normalize_name(combined)
+            # Disallow ensemble / multi-agent submissions as single model evidence
+            if self._is_ensemble_entry(r):
+                continue
 
-            if norm_target in norm_combined or _normalize_name(name) in norm_target:
+            name = (r.get("model_display") or r.get("name", "")).strip()
+            norm_name = _normalize_name(name)
+            if not norm_name or norm_name == "multiple":
+                continue
+
+            # Prioritize matching model_display / explicit single model identity
+            matched = False
+            if norm_target == norm_name:
+                matched = True
+            elif norm_target in norm_name or norm_name in norm_target:
+                if len(norm_target) >= 4 and len(norm_name) >= 4:
+                    matched = True
+                elif norm_target == norm_name:
+                    matched = True
+
+            # If not matched on display name, check if there is a single explicit Model tag
+            if not matched:
+                model_tags = [t for t in r.get("tags", []) if t.lower().startswith("model:")]
+                if len(model_tags) == 1:
+                    tag_model = model_tags[0].split(":", 1)[1].strip()
+                    norm_tag_model = _normalize_name(tag_model)
+                    if norm_target == norm_tag_model or (len(norm_target) >= 5 and norm_target in norm_tag_model):
+                        matched = True
+
+            if matched:
                 score = float(r.get("resolved") or 0.0)
                 if score > best_score:
                     best_score = score
                     best = r
+
         return best
 
     def get_evidence(

@@ -16,6 +16,49 @@ from model_watcher.types import (
 logger = logging.getLogger(__name__)
 
 
+def select_primary_evidence(evidence_list: List[BenchmarkEvidence]) -> BenchmarkEvidence:
+    """Selects primary evidence with bilateral comparability prioritized over confidence.
+
+    Rules:
+    1. Complete bilateral evidence (score_challenger != None and score_incumbent != None) is strictly preferred.
+    2. Among complete bilateral evidences, prioritize:
+       - Direct comparability (non-composite index > composite index)
+       - Harness compatibility (same/compatible harness > conflicting harness)
+       - Confidence (higher > lower)
+    3. If no complete bilateral evidence exists, pick the highest-quality unilateral evidence
+       (preferring presence of challenger score, then higher confidence) to explain Insufficient evidence.
+    """
+    def _bilateral_sort_key(e: BenchmarkEvidence):
+        unc = (e.known_uncertainty or "").lower()
+        is_composite = "composite" in unc
+        is_harness_diff = (not is_composite) and any(
+            k in unc for k in ("harness difference", "harness incompatibility", "different harness", "incompatib")
+        )
+        is_direct = not is_composite
+        harness_compat = not is_harness_diff
+        return (
+            1 if is_direct else 0,
+            1 if harness_compat else 0,
+            e.confidence,
+        )
+
+    def _unilateral_sort_key(e: BenchmarkEvidence):
+        has_challenger = e.score_challenger is not None
+        return (
+            1 if has_challenger else 0,
+            e.confidence,
+        )
+
+    complete_bilateral = [
+        e for e in evidence_list
+        if e.score_challenger is not None and e.score_incumbent is not None
+    ]
+    if complete_bilateral:
+        return sorted(complete_bilateral, key=_bilateral_sort_key, reverse=True)[0]
+
+    return sorted(evidence_list, key=_unilateral_sort_key, reverse=True)[0]
+
+
 class ModelEvaluator:
     def __init__(self, profile: UserProfile):
         self.profile = profile
@@ -61,8 +104,8 @@ class ModelEvaluator:
                 is_accessible=is_acc,
             )
 
-        # Pick primary evidence (prefer highest confidence)
-        primary_ev = sorted(evidence_list, key=lambda e: e.confidence, reverse=True)[0]
+        # Pick primary evidence (prefer complete bilateral evidence over unilateral high-confidence)
+        primary_ev = select_primary_evidence(evidence_list)
 
         # Calculate capability verdict
         c_score = primary_ev.score_challenger
