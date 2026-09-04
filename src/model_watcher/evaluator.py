@@ -28,14 +28,14 @@ class ModelEvaluator:
     ) -> RoleEvaluation:
         incumbent_name = self.profile.get_incumbent(role)
         challenger_name = challenger.display_name
+        is_acc = self.profile.is_accessible(challenger.canonical_id) or self.profile.is_accessible(challenger.display_name)
 
-        # Reviewer Golden Rule: Must output '? Insufficient evidence' if no direct code-review evidence
         if role == Role.REVIEWER:
-            direct_review_ev = [
-                e for e in evidence_list
-                if "review" in e.benchmark.lower() or "critic" in e.benchmark.lower() or "bug" in e.benchmark.lower()
-            ]
-            if not direct_review_ev:
+            has_review_evidence = any(
+                "review" in (e.benchmark or "").lower() or "inspect" in (e.benchmark or "").lower()
+                for e in evidence_list
+            )
+            if not has_review_evidence:
                 return RoleEvaluation(
                     role=role,
                     incumbent_model=incumbent_name,
@@ -45,6 +45,7 @@ class ModelEvaluator:
                     replace_rationale="审查角色要求严格直接的代码审查与缺陷挖掘证据，暂无直接测试数据，继续保留当前模型。",
                     primary_evidence=None,
                     all_evidence=[],
+                    is_accessible=is_acc,
                 )
 
         if not evidence_list:
@@ -57,6 +58,7 @@ class ModelEvaluator:
                 replace_rationale="该角色暂无可验证的直接对比基准证据，继续保留当前模型。",
                 primary_evidence=None,
                 all_evidence=[],
+                is_accessible=is_acc,
             )
 
         # Pick primary evidence (prefer highest confidence)
@@ -111,6 +113,7 @@ class ModelEvaluator:
             replace_rationale=rationale,
             primary_evidence=primary_ev,
             all_evidence=evidence_list,
+            is_accessible=is_acc,
         )
 
     def _determine_replacement(
@@ -122,6 +125,8 @@ class ModelEvaluator:
         primary_ev: BenchmarkEvidence,
         incumbent_name: str,
     ) -> Tuple[ReplaceVerdict, str]:
+        accessible = self.profile.is_accessible(challenger.canonical_id) or self.profile.is_accessible(challenger.display_name)
+
         # 1. If worse or no advantage, never replace primary
         if capability in (CapabilityVerdict.PROBABLY_WORSE, CapabilityVerdict.NO_ADVANTAGE, CapabilityVerdict.INSUFFICIENT_EVIDENCE):
             return ReplaceVerdict.NO, f"候选模型未展现出超越 {incumbent_name} 的明显能力优势（分差：{delta:+.1f}{primary_ev.display_metric}）。"
@@ -130,6 +135,8 @@ class ModelEvaluator:
         if capability == CapabilityVerdict.PROBABLY_BETTER:
             if primary_ev.known_uncertainty and "harness" in primary_ev.known_uncertainty.lower():
                 return ReplaceVerdict.NO, f"领先优势（+{delta:.1f}{primary_ev.display_metric}）可能是测试环境（{primary_ev.known_uncertainty}）带来的偏差，不值得冒切换风险。"
+            if not accessible:
+                return ReplaceVerdict.NO, f"候选模型仅小幅领先（+{delta:.1f}{primary_ev.display_metric}），优势不足以支持为了它新增订阅。"
             return ReplaceVerdict.NO, f"候选模型仅小幅领先（+{delta:.1f}{primary_ev.display_metric}），不足以抵消迁移成本和切换风险。"
 
         # 3. If clearly better (delta >= 5.0)
@@ -138,10 +145,15 @@ class ModelEvaluator:
             if primary_ev.known_uncertainty and "harness" in primary_ev.known_uncertainty.lower():
                 return ReplaceVerdict.NO, f"观察到明显领先（+{delta:.1f}{primary_ev.display_metric}），但存在测试环境不兼容（{primary_ev.known_uncertainty}），在获得同环境对比前暂不替换 {incumbent_name}。"
 
-            # Check accessibility constraint
-            accessible = self.profile.is_accessible(challenger.canonical_id) or self.profile.is_accessible(challenger.display_name)
+            # accessible_models 不再作为 Replace? 的硬门禁
             if not accessible:
-                return ReplaceVerdict.NO, f"候选模型表现出色（+{delta:.1f}{primary_ev.display_metric}），但在用户当前订阅/配置中不可直接使用。"
+                price_info = ""
+                if challenger.input_price_per_m is not None and challenger.output_price_per_m is not None:
+                    price_info = f"（参考定价：输入 ${challenger.input_price_per_m}/1M tokens，输出 ${challenger.output_price_per_m}/1M tokens）"
+                elif challenger.input_price_per_m is not None:
+                    price_info = f"（参考定价：输入 ${challenger.input_price_per_m}/1M tokens）"
+
+                return ReplaceVerdict.YES, f"在 {primary_ev.benchmark} 上具备经确证的明显能力优势（+{delta:.1f}{primary_ev.display_metric}），值得成为该角色首选。该模型尚未列入当前 Calibration 的可用模型，若需要新增订阅/API，请结合价格{price_info}决定是否获取。"
 
             return ReplaceVerdict.YES, f"在 {primary_ev.benchmark} 上具备经确证的明显能力优势（+{delta:.1f}{primary_ev.display_metric}），建议进行路由迁移。"
 
@@ -200,6 +212,8 @@ class ModelEvaluator:
         else:
             key_takeaway = "评估完成：没有任何维度足以改变当前模型路由组合，可以安全忽略本次发布。"
 
+        is_accessible = self.profile.is_accessible(challenger.canonical_id) or self.profile.is_accessible(challenger.display_name)
+
         return EvaluationReport(
             model=challenger,
             overall_verdict=overall_verdict,
@@ -213,4 +227,5 @@ class ModelEvaluator:
             evidence_ledger=evidence_ledger,
             baseline_revision=self.profile.revision,
             baseline_calibrated_at=self.profile.calibrated_at,
+            is_accessible=is_accessible,
         )

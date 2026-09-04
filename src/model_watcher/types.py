@@ -91,6 +91,7 @@ class RoleEvaluation:
     replace_rationale: str
     primary_evidence: Optional[BenchmarkEvidence] = None
     all_evidence: List[BenchmarkEvidence] = field(default_factory=list)
+    is_accessible: bool = True
 
 
 @dataclass
@@ -127,6 +128,7 @@ class EvaluationReport:
     created_at: str = ""
     baseline_revision: int = 1
     baseline_calibrated_at: str = ""
+    is_accessible: bool = True
 
 
 class ModelNotFoundError(Exception):

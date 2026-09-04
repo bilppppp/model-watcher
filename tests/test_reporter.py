@@ -212,7 +212,7 @@ class TestReporter(unittest.TestCase):
         md = self.reporter.format_report(report)
 
         # 1. Chinese Table headers
-        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("| 角色 | 当前模型 | 候选模型 | 当前可用性 | 能力判断 | 是否替换？ |", md)
         # 2. Chinese Role display names
         self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-5-Mini |", md)
         self.assertIn("| 规划 |", md)

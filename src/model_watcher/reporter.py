@@ -74,20 +74,22 @@ class MarkdownReporter:
             lines.append("> 已完成评估，没有任何维度足以改变当前模型组合，可以忽略这次发布。\n")
 
         # 2. 7-role Comparison Table
-        lines.append("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| 角色 | 当前模型 | 候选模型 | 当前可用性 | 能力判断 | 是否替换？ |")
+        lines.append("|---|---|---|---|---|---|")
         for role in Role:
             reval = report.role_evaluations.get(role)
             if reval:
                 cap_val = get_capability_cn(reval.capability)
                 rep_val = get_replace_cn(reval.replace)
                 inc_val = reval.incumbent_model
+                acc_val = "已配置" if getattr(reval, "is_accessible", report.is_accessible) else "未配置"
             else:
                 cap_val = CAPABILITY_CN_MAP[CapabilityVerdict.INSUFFICIENT_EVIDENCE]
                 rep_val = REPLACE_CN_MAP[ReplaceVerdict.NO]
                 inc_val = "未知"
+                acc_val = "未配置" if not report.is_accessible else "已配置"
 
-            lines.append(f"| {role.display_name} | {inc_val} | {report.model.display_name} | {cap_val} | {rep_val} |")
+            lines.append(f"| {role.display_name} | {inc_val} | {report.model.display_name} | {acc_val} | {cap_val} | {rep_val} |")
         lines.append("")
 
         # 3. Suggested Adjustments
@@ -95,6 +97,13 @@ class MarkdownReporter:
         if report.suggested_adjustments:
             for adj in report.suggested_adjustments:
                 lines.append(f"- {adj}")
+            if not report.is_accessible:
+                price_info = ""
+                if report.model.input_price_per_m is not None and report.model.output_price_per_m is not None:
+                    price_info = f"（参考价格：输入 ${report.model.input_price_per_m}/1M tokens，输出 ${report.model.output_price_per_m}/1M tokens）"
+                elif report.model.input_price_per_m is not None:
+                    price_info = f"（参考价格：输入 ${report.model.input_price_per_m}/1M tokens）"
+                lines.append(f"\n> 💡 该模型尚未列入当前 Calibration 的可用模型，若需要新增订阅/API，请结合价格{price_info}决定是否获取。")
         else:
             lines.append("无路由调整建议。当前组合保持最优。")
         lines.append("")

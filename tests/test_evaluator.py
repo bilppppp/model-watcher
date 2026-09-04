@@ -96,6 +96,127 @@ class TestEvaluator(unittest.TestCase):
         self.assertEqual(res.capability, CapabilityVerdict.PROBABLY_BETTER)
         self.assertEqual(res.replace, ReplaceVerdict.NO)
 
+    def test_clearly_better_inaccessible_triggers_replace_yes_and_unconfigured_availability(self):
+        """Clearly Better + inaccessible → Replace Yes + 当前可用性=未配置"""
+        from model_watcher.reporter import MarkdownReporter
+        reporter = MarkdownReporter(reports_dir=Path(self.tmp_dir.name) / "reports")
+
+        challenger = ModelMetadata(
+            canonical_id="inaccessible-strong-model",
+            display_name="Inaccessible Strong Model",
+            provider="FutureAI",
+            input_price_per_m=2.5,
+            output_price_per_m=10.0,
+        )
+        self.assertFalse(self.profile.is_accessible(challenger.canonical_id))
+
+        evidence = [
+            BenchmarkEvidence(
+                source="LiveBench",
+                benchmark="LiveBench (Coding)",
+                version="2026_06_25",
+                score_challenger=92.0,
+                score_incumbent=80.0,
+                display_metric="%",
+                harness="official public leaderboard",
+                confidence=0.9,
+            )
+        ]
+
+        res = self.evaluator.evaluate_role(Role.CODER, challenger, evidence)
+        self.assertEqual(res.capability, CapabilityVerdict.CLEARLY_BETTER)
+        self.assertEqual(res.replace, ReplaceVerdict.YES)
+        self.assertFalse(res.is_accessible)
+        self.assertIn("该模型尚未列入当前 Calibration 的可用模型，若需要新增订阅/API，请结合价格", res.replace_rationale)
+
+        report = self.evaluator.build_report(challenger, {Role.CODER: res})
+        md = reporter.format_report(report)
+
+        self.assertIn("| 角色 | 当前模型 | 候选模型 | 当前可用性 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | Inaccessible Strong Model | 未配置 | ↑ 明显更强 | 是 |", md)
+        self.assertIn("该模型尚未列入当前 Calibration 的可用模型，若需要新增订阅/API，请结合价格", md)
+
+    def test_probably_better_inaccessible_triggers_replace_no(self):
+        """Probably Better + inaccessible → Replace No with subscription rationale"""
+        challenger = ModelMetadata(
+            canonical_id="inaccessible-marginal-model",
+            display_name="Inaccessible Marginal Model",
+            provider="FutureAI",
+        )
+        self.assertFalse(self.profile.is_accessible(challenger.canonical_id))
+
+        evidence = [
+            BenchmarkEvidence(
+                source="LiveBench",
+                benchmark="LiveBench (Coding)",
+                version="2026_06_25",
+                score_challenger=83.0,
+                score_incumbent=80.0,
+                display_metric="%",
+                confidence=0.85,
+            )
+        ]
+
+        res = self.evaluator.evaluate_role(Role.CODER, challenger, evidence)
+        self.assertEqual(res.capability, CapabilityVerdict.PROBABLY_BETTER)
+        self.assertEqual(res.replace, ReplaceVerdict.NO)
+        self.assertIn("优势不足以支持为了它新增订阅", res.replace_rationale)
+
+    def test_clearly_better_accessible_triggers_replace_yes(self):
+        """Clearly Better + accessible → Replace Yes"""
+        from model_watcher.reporter import MarkdownReporter
+        reporter = MarkdownReporter(reports_dir=Path(self.tmp_dir.name) / "reports")
+
+        # gpt-4o is in self.profile.accessible_models by default
+        challenger = ModelMetadata(
+            canonical_id="gpt-4o",
+            display_name="GPT-4o",
+            provider="OpenAI",
+        )
+        self.assertTrue(self.profile.is_accessible(challenger.canonical_id))
+
+        evidence = [
+            BenchmarkEvidence(
+                source="LiveBench",
+                benchmark="LiveBench (Coding)",
+                version="2026_06_25",
+                score_challenger=92.0,
+                score_incumbent=80.0,
+                display_metric="%",
+                harness="official public leaderboard",
+                confidence=0.9,
+            )
+        ]
+
+        res = self.evaluator.evaluate_role(Role.CODER, challenger, evidence)
+        self.assertEqual(res.capability, CapabilityVerdict.CLEARLY_BETTER)
+        self.assertEqual(res.replace, ReplaceVerdict.YES)
+        self.assertTrue(res.is_accessible)
+
+        report = self.evaluator.build_report(challenger, {Role.CODER: res})
+        md = reporter.format_report(report)
+
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-4o | 已配置 | ↑ 明显更强 | 是 |", md)
+
+    def test_accessibility_does_not_alter_capability_verdict(self):
+        """accessibility 不得改变 Capability Verdict"""
+        accessible_model = ModelMetadata(canonical_id="gpt-4o", display_name="GPT-4o", provider="OpenAI")
+        inaccessible_model = ModelMetadata(canonical_id="future-model", display_name="Future Model", provider="FutureOrg")
+
+        # Score delta +8 (clearly better)
+        ev_clearly = [BenchmarkEvidence(source="S", benchmark="B", version="v1", score_challenger=88.0, score_incumbent=80.0)]
+        res_acc_clear = self.evaluator.evaluate_role(Role.CODER, accessible_model, ev_clearly)
+        res_inacc_clear = self.evaluator.evaluate_role(Role.CODER, inaccessible_model, ev_clearly)
+        self.assertEqual(res_acc_clear.capability, res_inacc_clear.capability)
+        self.assertEqual(res_acc_clear.capability, CapabilityVerdict.CLEARLY_BETTER)
+
+        # Score delta +3 (probably better)
+        ev_prob = [BenchmarkEvidence(source="S", benchmark="B", version="v1", score_challenger=83.0, score_incumbent=80.0)]
+        res_acc_prob = self.evaluator.evaluate_role(Role.CODER, accessible_model, ev_prob)
+        res_inacc_prob = self.evaluator.evaluate_role(Role.CODER, inaccessible_model, ev_prob)
+        self.assertEqual(res_acc_prob.capability, res_inacc_prob.capability)
+        self.assertEqual(res_acc_prob.capability, CapabilityVerdict.PROBABLY_BETTER)
+
 
 if __name__ == "__main__":
     unittest.main()
