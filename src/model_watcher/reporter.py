@@ -57,6 +57,8 @@ class MarkdownReporter:
         lines.append(f"# 🆕 {report.model.display_name}\n")
         lines.append(f"**结论：** {report.overall_verdict}")
         lines.append(f"**本次改变：{report.routes_changed}/{report.total_routes} 个当前模型路由**")
+        acc_str = "已配置" if getattr(report, "is_accessible", True) else "未配置（未列入当前 Calibration）"
+        lines.append(f"**当前可用性：** {acc_str}")
 
         # Provenance and Calibration lines
         lines.append(f"**当前校准基线：** Revision {report.baseline_revision}（{report.baseline_calibrated_at or 'Initial'}）")
@@ -71,25 +73,26 @@ class MarkdownReporter:
 
         # 0/7 routes disclaimer
         if report.routes_changed == 0:
-            lines.append("> 已完成评估，没有任何维度足以改变当前模型组合，可以忽略这次发布。\n")
+            if report.overall_verdict == "值得关注":
+                lines.append("> 暂不调整当前路由，但存在值得继续观察的能力或价格信号。\n")
+            else:
+                lines.append("> 没有发现足以改变当前工作流的信号，可以忽略本次发布。\n")
 
         # 2. 7-role Comparison Table
-        lines.append("| 角色 | 当前模型 | 候选模型 | 当前可用性 | 能力判断 | 是否替换？ |")
-        lines.append("|---|---|---|---|---|---|")
+        lines.append("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |")
+        lines.append("|---|---|---|---|---|")
         for role in Role:
             reval = report.role_evaluations.get(role)
             if reval:
                 cap_val = get_capability_cn(reval.capability)
                 rep_val = get_replace_cn(reval.replace)
                 inc_val = reval.incumbent_model
-                acc_val = "已配置" if getattr(reval, "is_accessible", report.is_accessible) else "未配置"
             else:
                 cap_val = CAPABILITY_CN_MAP[CapabilityVerdict.INSUFFICIENT_EVIDENCE]
                 rep_val = REPLACE_CN_MAP[ReplaceVerdict.NO]
                 inc_val = "未知"
-                acc_val = "未配置" if not report.is_accessible else "已配置"
 
-            lines.append(f"| {role.display_name} | {inc_val} | {report.model.display_name} | {acc_val} | {cap_val} | {rep_val} |")
+            lines.append(f"| {role.display_name} | {inc_val} | {report.model.display_name} | {cap_val} | {rep_val} |")
         lines.append("")
 
         # 3. Suggested Adjustments
@@ -105,7 +108,7 @@ class MarkdownReporter:
                     price_info = f"（参考价格：输入 ${report.model.input_price_per_m}/1M tokens）"
                 lines.append(f"\n> 💡 该模型尚未列入当前 Calibration 的可用模型，若需要新增订阅/API，请结合价格{price_info}决定是否获取。")
         else:
-            lines.append("无路由调整建议。当前组合保持最优。")
+            lines.append("暂无足够证据支持调整当前路由。")
         lines.append("")
 
         # 4. Kept Incumbents
@@ -132,21 +135,21 @@ class MarkdownReporter:
         lines.append("")
 
         # 7. Evidence / Confidence
-        lines.append("## Evidence / Confidence\n")
+        lines.append("## 证据 / 置信度\n")
         if report.evidence_ledger:
             for ev in report.evidence_ledger:
-                lines.append(f"- **Source:** {ev.source} | **Benchmark:** {ev.benchmark} ({ev.version})")
+                lines.append(f"- **来源：** {ev.source} | **基准：** {ev.benchmark} ({ev.version})")
                 challenger_score_str = f"{ev.score_challenger}{ev.display_metric}" if ev.score_challenger is not None else "N/A"
                 if ev.score_incumbent is not None:
                     incumbent_score_str = f" vs Incumbent: {ev.score_incumbent}{ev.display_metric}"
                 else:
                     incumbent_score_str = ""
-                lines.append(f"  - **Score:** Challenger: {challenger_score_str}{incumbent_score_str}")
-                lines.append(f"  - **Harness:** {ev.harness}")
-                lines.append(f"  - **URL:** {ev.url}")
-                lines.append(f"  - **Confidence:** {int(ev.confidence * 100)}%")
+                lines.append(f"  - **得分：** Challenger: {challenger_score_str}{incumbent_score_str}")
+                lines.append(f"  - **评测环境：** {ev.harness}")
+                lines.append(f"  - **URL：** {ev.url}")
+                lines.append(f"  - **置信度：** {int(ev.confidence * 100)}%")
                 if ev.known_uncertainty:
-                    lines.append(f"  - **Uncertainty:** {ev.known_uncertainty}")
+                    lines.append(f"  - **不确定性：** {ev.known_uncertainty}")
                 lines.append("")
         else:
             lines.append("- 缺乏独立公开的标准化基准测试分数；暂无高置信度核心证据。\n")
@@ -277,7 +280,11 @@ class MarkdownReporter:
             for b_key in sorted(all_benchmark_keys):
                 harnesses = set(candidate_ev_maps[r.model.display_name][b_key][1] for r in replace_yes_reports)
                 uncertainties = [candidate_ev_maps[r.model.display_name][b_key][2] for r in replace_yes_reports]
-                has_harness_issue = any("harness" in (u or "").lower() for u in uncertainties)
+                has_harness_issue = any(
+                    ("harness difference" in (u or "").lower() or "incompatib" in (u or "").lower() or "different harness" in (u or "").lower())
+                    and "composite" not in (u or "").lower()
+                    for u in uncertainties
+                )
                 if len(harnesses) == 1 and not has_harness_issue:
                     valid_common_keys.append(b_key)
 

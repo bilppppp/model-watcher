@@ -73,15 +73,10 @@ class ModelEvaluator:
             replace = ReplaceVerdict.NO
             rationale = "候选模型缺少该基准测试得分，继续保留当前模型。"
         elif i_score is None:
-            # Only challenger score is known
-            if c_score >= 80.0:
-                capability = CapabilityVerdict.PROBABLY_BETTER
-                replace = ReplaceVerdict.NO
-                rationale = f"候选模型取得高分（{c_score}{primary_ev.display_metric}），但当前主力模型在相同基准上暂无确证对比分。"
-            else:
-                capability = CapabilityVerdict.NO_ADVANTAGE
-                replace = ReplaceVerdict.NO
-                rationale = "候选模型表现一般，且暂无与当前主力的直接同测对比。"
+            # Missing incumbent comparative score: strictly Insufficient evidence
+            capability = CapabilityVerdict.INSUFFICIENT_EVIDENCE
+            replace = ReplaceVerdict.NO
+            rationale = "当前主力模型在相同基准上缺少直接可比得分，继续保留当前模型。"
         else:
             delta = c_score - i_score
             # Relative thresholding
@@ -126,6 +121,15 @@ class ModelEvaluator:
         incumbent_name: str,
     ) -> Tuple[ReplaceVerdict, str]:
         accessible = self.profile.is_accessible(challenger.canonical_id) or self.profile.is_accessible(challenger.display_name)
+        is_composite = primary_ev.known_uncertainty and "composite" in primary_ev.known_uncertainty.lower()
+        is_harness_diff = (
+            primary_ev.known_uncertainty
+            and not is_composite
+            and any(
+                k in primary_ev.known_uncertainty.lower()
+                for k in ("harness difference", "harness incompatibility", "different harness", "incompatib")
+            )
+        )
 
         # 1. If worse or no advantage, never replace primary
         if capability in (CapabilityVerdict.PROBABLY_WORSE, CapabilityVerdict.NO_ADVANTAGE, CapabilityVerdict.INSUFFICIENT_EVIDENCE):
@@ -133,7 +137,12 @@ class ModelEvaluator:
 
         # 2. If only marginal advantage (1.5 <= delta < 5.0), default NO
         if capability == CapabilityVerdict.PROBABLY_BETTER:
-            if primary_ev.known_uncertainty and "harness" in primary_ev.known_uncertainty.lower():
+            if is_composite:
+                return (
+                    ReplaceVerdict.NO,
+                    f"候选模型在综合指数上小幅领先（+{delta:.1f} {primary_ev.display_metric}），缺少直接可比 benchmark 验证，不足以调整当前路由。",
+                )
+            if is_harness_diff:
                 return ReplaceVerdict.NO, f"领先优势（+{delta:.1f}{primary_ev.display_metric}）可能是测试环境（{primary_ev.known_uncertainty}）带来的偏差，不值得冒切换风险。"
             if not accessible:
                 return ReplaceVerdict.NO, f"候选模型仅小幅领先（+{delta:.1f}{primary_ev.display_metric}），优势不足以支持为了它新增订阅。"
@@ -141,8 +150,14 @@ class ModelEvaluator:
 
         # 3. If clearly better (delta >= 5.0)
         if capability == CapabilityVerdict.CLEARLY_BETTER:
+            if is_composite:
+                return (
+                    ReplaceVerdict.NO,
+                    f"观察到明显领先（+{delta:.1f} {primary_ev.display_metric}），但该证据属于跨多个独立评测形成的综合指数，目前缺少直接可比 benchmark 的交叉验证，因此暂不调整路由。",
+                )
+
             # Check harness comparability
-            if primary_ev.known_uncertainty and "harness" in primary_ev.known_uncertainty.lower():
+            if is_harness_diff:
                 return ReplaceVerdict.NO, f"观察到明显领先（+{delta:.1f}{primary_ev.display_metric}），但存在测试环境不兼容（{primary_ev.known_uncertainty}），在获得同环境对比前暂不替换 {incumbent_name}。"
 
             # accessible_models 不再作为 Replace? 的硬门禁
@@ -199,8 +214,15 @@ class ModelEvaluator:
         # Check for new specialist / worker use cases
         if challenger.input_price_per_m is not None and challenger.input_price_per_m <= 0.8:
             new_use_cases.append(f"极低成本后台执行工 / Subagent（${challenger.input_price_per_m}/1M 输入 Tokens）")
-        if role_evaluations.get(Role.CODER) and role_evaluations[Role.CODER].capability in (CapabilityVerdict.CLEARLY_BETTER, CapabilityVerdict.PROBABLY_BETTER):
-            new_use_cases.append("针对高难代码难题的专有构建模型")
+
+        # Coder specialist requires Clearly Better + direct non-composite benchmark evidence
+        coder_eval = role_evaluations.get(Role.CODER)
+        if coder_eval and coder_eval.capability == CapabilityVerdict.CLEARLY_BETTER:
+            coder_ev = coder_eval.primary_evidence
+            is_comp = coder_ev and coder_ev.known_uncertainty and "composite" in coder_ev.known_uncertainty.lower()
+            if coder_ev and not is_comp:
+                new_use_cases.append("针对高难代码难题的专有构建模型")
+
         if role_evaluations.get(Role.MULTIMODAL) and role_evaluations[Role.MULTIMODAL].capability in (CapabilityVerdict.CLEARLY_BETTER, CapabilityVerdict.PROBABLY_BETTER):
             new_use_cases.append("多模态文档与图表分析专有模型")
 
@@ -210,7 +232,7 @@ class ModelEvaluator:
         elif overall_verdict == "值得关注":
             key_takeaway = "展现出前沿能力或极具吸引力的定价，但尚缺乏经确证的足够领先优势来替换当前主力。"
         else:
-            key_takeaway = "评估完成：没有任何维度足以改变当前模型路由组合，可以安全忽略本次发布。"
+            key_takeaway = "评估完成：没有发现足以改变当前工作流的信号，可以安全忽略本次发布。"
 
         is_accessible = self.profile.is_accessible(challenger.canonical_id) or self.profile.is_accessible(challenger.display_name)
 

@@ -47,9 +47,9 @@ class TestReporter(unittest.TestCase):
 
         self.assertIn("# 🆕 GPT-Test", md)
         self.assertIn("本次改变：0/7 个当前模型路由", md)
-        self.assertIn("> 已完成评估，没有任何维度足以改变当前模型组合，可以忽略这次发布。", md)
+        self.assertIn("> 没有发现足以改变当前工作流的信号，可以忽略本次发布。", md)
         self.assertIn("## 保持不动", md)
-        self.assertIn("## Evidence / Confidence", md)
+        self.assertIn("## 证据 / 置信度", md)
 
     def test_evidence_traceability_in_report(self):
         """Report 中 source/provenance 可追溯"""
@@ -82,12 +82,12 @@ class TestReporter(unittest.TestCase):
         report = self.evaluator.build_report(challenger, role_evals)
         md = self.reporter.format_report(report)
 
-        self.assertIn("Source:** SWE-bench", md)
-        self.assertIn("Benchmark:** SWE-bench Verified", md)
-        self.assertIn("Score:** Challenger: 89.5% vs Incumbent: 80.2%", md)
-        self.assertIn("Harness:** SWE-agent-harness", md)
-        self.assertIn("URL:** https://www.swebench.com/results", md)
-        self.assertIn("Confidence:** 90%", md)
+        self.assertIn("来源：** SWE-bench", md)
+        self.assertIn("基准：** SWE-bench Verified", md)
+        self.assertIn("得分：** Challenger: 89.5% vs Incumbent: 80.2%", md)
+        self.assertIn("评测环境：** SWE-agent-harness", md)
+        self.assertIn("URL：** https://www.swebench.com/results", md)
+        self.assertIn("置信度：** 90%", md)
 
     def _create_dummy_report(self, model_id: str, display_name: str, coder_replace: bool, coder_score: float, benchmark_name: str, harness: str = "official"):
         challenger = ModelMetadata(canonical_id=model_id, display_name=display_name, provider="Provider")
@@ -212,7 +212,8 @@ class TestReporter(unittest.TestCase):
         md = self.reporter.format_report(report)
 
         # 1. Chinese Table headers
-        self.assertIn("| 角色 | 当前模型 | 候选模型 | 当前可用性 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("**当前可用性：** 未配置（未列入当前 Calibration）", md)
         # 2. Chinese Role display names
         self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-5-Mini |", md)
         self.assertIn("| 规划 |", md)
@@ -235,6 +236,122 @@ class TestReporter(unittest.TestCase):
         self.assertIn("LiveBench", md)
         self.assertIn("LiveBench (Coding)", md)
         self.assertIn("official public leaderboard", md)
+
+    def test_zero_out_of_seven_worth_watching_disclaimer_no_contradiction(self):
+        """Regression 2: 0/7 + 值得关注 must NOT contain '可以忽略' and must output correct prompt."""
+        challenger = ModelMetadata(canonical_id="gpt-watch", display_name="GPT-Watch", provider="OpenAI", input_price_per_m=0.5)
+        role_evals = {}
+        for r in Role:
+            role_evals[r] = RoleEvaluation(
+                role=r,
+                incumbent_model="claude-3-7-sonnet",
+                challenger_model="gpt-watch",
+                capability=CapabilityVerdict.CLEARLY_BETTER if r == Role.CODER else CapabilityVerdict.NO_ADVANTAGE,
+                replace=ReplaceVerdict.NO,
+                replace_rationale="Composite index, retain incumbent.",
+            )
+
+        report = self.evaluator.build_report(challenger, role_evals)
+        self.assertEqual(report.routes_changed, 0)
+        self.assertEqual(report.overall_verdict, "值得关注")
+
+        md = self.reporter.format_report(report)
+        self.assertIn("**结论：** 值得关注", md)
+        self.assertIn("> 暂不调整当前路由，但存在值得继续观察的能力或价格信号。", md)
+        self.assertNotIn("可以忽略本次发布", md)
+        self.assertNotIn("可以忽略这次发布", md)
+
+    def test_missing_evidence_does_not_claim_current_combo_optimal(self):
+        """Regression 4: When no route adjustments are suggested, do NOT claim '当前组合保持最优'."""
+        challenger = ModelMetadata(canonical_id="model-sparse", display_name="Model Sparse", provider="Provider")
+        role_evals = {}
+        for r in Role:
+            role_evals[r] = RoleEvaluation(
+                role=r,
+                incumbent_model="incumbent",
+                challenger_model="model-sparse",
+                capability=CapabilityVerdict.INSUFFICIENT_EVIDENCE,
+                replace=ReplaceVerdict.NO,
+                replace_rationale="No benchmark data.",
+            )
+
+        report = self.evaluator.build_report(challenger, role_evals)
+        md = self.reporter.format_report(report)
+
+        self.assertIn("暂无足够证据支持调整当前路由。", md)
+        self.assertNotIn("当前组合保持最优", md)
+
+    def test_complete_chinese_ui_labels_in_evidence_and_header(self):
+        """Regression 6: Chinese UI labels are complete in report header, table, and evidence sections."""
+        challenger = ModelMetadata(
+            canonical_id="model-cn-ui",
+            display_name="Model CN UI",
+            provider="Provider",
+            input_price_per_m=0.5,
+            output_price_per_m=1.5,
+        )
+        ev = BenchmarkEvidence(
+            source="LiveBench",
+            benchmark="LiveBench (Coding)",
+            version="2026_06_25",
+            score_challenger=95.0,
+            score_incumbent=80.0,
+            display_metric="%",
+            harness="official",
+            url="https://livebench.ai",
+            confidence=0.9,
+            known_uncertainty="Verified run",
+        )
+        role_evals = {
+            Role.CODER: RoleEvaluation(
+                role=Role.CODER,
+                incumbent_model="claude-3-7-sonnet",
+                challenger_model="Model CN UI",
+                capability=CapabilityVerdict.CLEARLY_BETTER,
+                replace=ReplaceVerdict.YES,
+                replace_rationale="Clear advantage",
+                primary_evidence=ev,
+                all_evidence=[ev],
+            )
+        }
+        for r in Role:
+            if r != Role.CODER:
+                role_evals[r] = RoleEvaluation(
+                    role=r,
+                    incumbent_model="claude-3-7-sonnet",
+                    challenger_model="Model CN UI",
+                    capability=CapabilityVerdict.INSUFFICIENT_EVIDENCE,
+                    replace=ReplaceVerdict.NO,
+                    replace_rationale="No evidence",
+                )
+
+        report = self.evaluator.build_report(challenger, role_evals)
+        md = self.reporter.format_report(report)
+
+        # Header labels
+        self.assertIn("**结论：**", md)
+        self.assertIn("**本次改变：", md)
+        self.assertIn("**当前可用性：**", md)
+        self.assertIn("**当前校准基线：**", md)
+
+        # Table header
+        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+
+        # Section labels
+        self.assertIn("## 建议调整", md)
+        self.assertIn("## 保持不动", md)
+        self.assertIn("## 新用途", md)
+        self.assertIn("## 最值得知道的一点", md)
+        self.assertIn("## 证据 / 置信度", md)
+
+        # Evidence field labels
+        self.assertIn("- **来源：** LiveBench", md)
+        self.assertIn("**基准：** LiveBench (Coding)", md)
+        self.assertIn("- **得分：**", md)
+        self.assertIn("- **评测环境：** official", md)
+        self.assertIn("- **URL：** https://livebench.ai", md)
+        self.assertIn("- **置信度：** 90%", md)
+        self.assertIn("- **不确定性：** Verified run", md)
 
 
 if __name__ == "__main__":

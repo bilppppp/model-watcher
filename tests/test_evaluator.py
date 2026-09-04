@@ -132,8 +132,9 @@ class TestEvaluator(unittest.TestCase):
         report = self.evaluator.build_report(challenger, {Role.CODER: res})
         md = reporter.format_report(report)
 
-        self.assertIn("| 角色 | 当前模型 | 候选模型 | 当前可用性 | 能力判断 | 是否替换？ |", md)
-        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | Inaccessible Strong Model | 未配置 | ↑ 明显更强 | 是 |", md)
+        self.assertIn("**当前可用性：** 未配置（未列入当前 Calibration）", md)
+        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | Inaccessible Strong Model | ↑ 明显更强 | 是 |", md)
         self.assertIn("该模型尚未列入当前 Calibration 的可用模型，若需要新增订阅/API，请结合价格", md)
 
     def test_probably_better_inaccessible_triggers_replace_no(self):
@@ -196,7 +197,9 @@ class TestEvaluator(unittest.TestCase):
         report = self.evaluator.build_report(challenger, {Role.CODER: res})
         md = reporter.format_report(report)
 
-        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-4o | 已配置 | ↑ 明显更强 | 是 |", md)
+        self.assertIn("**当前可用性：** 已配置", md)
+        self.assertIn("| 角色 | 当前模型 | 候选模型 | 能力判断 | 是否替换？ |", md)
+        self.assertIn("| 编码 / 构建 | claude-3-7-sonnet | GPT-4o | ↑ 明显更强 | 是 |", md)
 
     def test_accessibility_does_not_alter_capability_verdict(self):
         """accessibility 不得改变 Capability Verdict"""
@@ -216,6 +219,81 @@ class TestEvaluator(unittest.TestCase):
         res_inacc_prob = self.evaluator.evaluate_role(Role.CODER, inaccessible_model, ev_prob)
         self.assertEqual(res_acc_prob.capability, res_inacc_prob.capability)
         self.assertEqual(res_acc_prob.capability, CapabilityVerdict.PROBABLY_BETTER)
+
+    def test_missing_incumbent_score_yields_insufficient_evidence(self):
+        """Regression 1: challenger score exists + incumbent score missing → Insufficient evidence (never infer from absolute score)"""
+        challenger = ModelMetadata(canonical_id="challenger-solo", display_name="Challenger Solo", provider="Org")
+        evidence = [
+            BenchmarkEvidence(
+                source="LiveBench",
+                benchmark="LiveBench (Coding)",
+                version="2026_06_25",
+                score_challenger=96.0,
+                score_incumbent=None,
+                display_metric="%",
+            )
+        ]
+        res = self.evaluator.evaluate_role(Role.CODER, challenger, evidence)
+        self.assertEqual(res.capability, CapabilityVerdict.INSUFFICIENT_EVIDENCE)
+        self.assertEqual(res.replace, ReplaceVerdict.NO)
+        self.assertIn("当前主力模型在相同基准上缺少直接可比得分", res.replace_rationale)
+
+    def test_aa_composite_uncertainty_semantics_not_harness_incompatibility(self):
+        """Regression 3: Artificial Analysis composite index uncertainty must NOT output '测试环境不兼容'"""
+        challenger = ModelMetadata(canonical_id="challenger-comp", display_name="Challenger Comp", provider="Org")
+        evidence = [
+            BenchmarkEvidence(
+                source="Artificial Analysis",
+                benchmark="Quality Index",
+                version="v1",
+                score_challenger=92.0,
+                score_incumbent=80.0,
+                display_metric=" Index",
+                known_uncertainty="Composite index computed across independent test harness runs",
+            )
+        ]
+        res = self.evaluator.evaluate_role(Role.CODER, challenger, evidence)
+        self.assertEqual(res.capability, CapabilityVerdict.CLEARLY_BETTER)
+        self.assertEqual(res.replace, ReplaceVerdict.NO)
+        self.assertNotIn("测试环境不兼容", res.replace_rationale)
+        self.assertIn("属于跨多个独立评测形成的综合指数", res.replace_rationale)
+
+    def test_probably_better_or_composite_coder_does_not_generate_specialist_use_case(self):
+        """Regression 5: Probably Better coder or composite index does NOT generate '针对高难代码难题的专有构建模型'"""
+        challenger = ModelMetadata(canonical_id="challenger-pb", display_name="Challenger PB", provider="Org")
+
+        # 1. Probably better
+        ev_pb = [
+            BenchmarkEvidence(
+                source="LiveBench",
+                benchmark="LiveBench (Coding)",
+                version="2026_06_25",
+                score_challenger=83.0,
+                score_incumbent=80.0,
+                display_metric="%",
+            )
+        ]
+        res_pb = self.evaluator.evaluate_role(Role.CODER, challenger, ev_pb)
+        self.assertEqual(res_pb.capability, CapabilityVerdict.PROBABLY_BETTER)
+        report_pb = self.evaluator.build_report(challenger, {Role.CODER: res_pb})
+        self.assertNotIn("针对高难代码难题的专有构建模型", report_pb.new_use_cases)
+
+        # 2. Clearly better but composite index
+        ev_comp = [
+            BenchmarkEvidence(
+                source="Artificial Analysis",
+                benchmark="Coding Index",
+                version="v1",
+                score_challenger=90.0,
+                score_incumbent=80.0,
+                display_metric=" Index",
+                known_uncertainty="Composite index computed across independent test harness runs",
+            )
+        ]
+        res_comp = self.evaluator.evaluate_role(Role.CODER, challenger, ev_comp)
+        self.assertEqual(res_comp.capability, CapabilityVerdict.CLEARLY_BETTER)
+        report_comp = self.evaluator.build_report(challenger, {Role.CODER: res_comp})
+        self.assertNotIn("针对高难代码难题的专有构建模型", report_comp.new_use_cases)
 
 
 if __name__ == "__main__":
