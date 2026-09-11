@@ -97,15 +97,21 @@ If running for the first time, establish your model usage baseline:
 ./bin/model-watcher init --defaults
 ```
 
-### 2. Check Status
+### 2. On-demand Model Compare
+
+Compare any model against your active 7-role baseline without mutating state:
 
 ```bash
-./bin/model-watcher status
+# Single model compare against current baseline
+./bin/model-watcher compare "gemini-2.5-pro"
+
+# Multi-model compare with order-invariant cross-model summary table
+./bin/model-watcher compare "claude-3-5-sonnet" "gpt-4o"
 ```
 
-### 3. Run Single Cycle
+### 3. Run Monitoring Cycle
 
-Designed to be called once by an external scheduler (cron, systemd timer, launchd, or manual invocation):
+Designed to be called periodically by an external scheduler (cron, systemd timer, launchd, or manual invocation):
 
 ```bash
 # Standard single execution: discovers new models, evaluates, updates state, exits
@@ -116,6 +122,43 @@ Designed to be called once by an external scheduler (cron, systemd timer, launch
 
 # Dry-run evaluation on a specific frontier model
 ./bin/model-watcher run --model "claude-opus-4-7" --dry-run
+```
+
+### 4. Check Status
+
+```bash
+./bin/model-watcher status
+```
+
+---
+
+## API Keys
+
+For full data coverage, Model Watcher uses two API keys:
+
+### Artificial Analysis
+
+Used for model metadata, benchmark indices, pricing, speed, and release information.
+
+1. Create or sign in to your account at [Artificial Analysis](https://artificialanalysis.ai/).
+2. Open the API key management page.
+3. Create a free API key and copy it.
+
+### Harbor Hub
+
+Used to access Harbor Hub / Terminal-Bench leaderboard data.
+
+1. Sign in to [Harbor Hub](https://hub.harborframework.com/).
+2. Open **Profile → Settings → API Keys**.
+3. Click **Create API key** and copy the generated key.
+
+You can also run `harbor auth login`; Harbor will automatically create and store credentials for the CLI.
+
+Create a `.env` file in the project root:
+
+```bash
+ARTIFICIAL_ANALYSIS_API_KEY="your_key_here"
+HARBOR_API_KEY="your_key_here"
 ```
 
 ---

@@ -134,6 +134,37 @@ Model Watcher 的所有裁决均基于用户最新真实的模型基准 `profile
 
 ---
 
+## 🔑 API Keys
+
+为了获得完整的数据覆盖，Model Watcher 使用两个 API key：
+
+### Artificial Analysis
+
+用于获取模型元数据、基准指数（Benchmark indices）、定价、速度与发布信息。
+
+1. 在 [Artificial Analysis](https://artificialanalysis.ai/) 注册或登录账户。
+2. 打开 API key 管理页面。
+3. 创建一个免费的 API key 并复制。
+
+### Harbor Hub
+
+用于访问 Harbor Hub / Terminal-Bench 排行榜数据。
+
+1. 登录 [Harbor Hub](https://hub.harborframework.com/)。
+2. 打开 **Profile → Settings → API Keys**。
+3. 点击 **Create API key** 并复制生成的密钥。
+
+也可以直接运行 `harbor auth login`；Harbor 会自动为 CLI 创建并保存凭据。
+
+在项目根目录下创建 `.env` 文件：
+
+```bash
+ARTIFICIAL_ANALYSIS_API_KEY="your_key_here"
+HARBOR_API_KEY="your_key_here"
+```
+
+---
+
 ## 📡 权威数据源层级规范
 
 1. **P0 权威公开榜单**：
