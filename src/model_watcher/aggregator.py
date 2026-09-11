@@ -7,6 +7,11 @@ import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional
 
+from model_watcher.family import (
+    get_release_family_id,
+    group_candidates_by_family,
+    select_family_representative,
+)
 from model_watcher.sources.artificial_analysis import ArtificialAnalysisSource
 from model_watcher.sources.harbor import HarborSource
 from model_watcher.sources.livebench import LiveBenchSource
@@ -304,26 +309,62 @@ class ModelAggregator:
             matched_model = self.resolve_model(force_model, candidates=candidates)
             return [matched_model]
 
-        pending = []
+        pending_raw = []
         for m in candidates:
+            fam_id = get_release_family_id(m.canonical_id, m.display_name)
+            if state.is_family_suppressed(fam_id):
+                # Family already in historical baseline (SEEN) or evaluated (PROVISIONAL/MATURE);
+                # record new sibling into state silently if not present
+                if m.canonical_id not in state.models:
+                    state.record_seen(
+                        canonical_id=m.canonical_id,
+                        display_name=m.display_name,
+                        provider=m.provider,
+                        release_date=m.release_date,
+                        release_evidence_level=m.release_evidence_level,
+                        release_confirmed=m.release_confirmed,
+                        repository_first_seen=m.repository_first_seen,
+                        family_id=fam_id,
+                    )
+                continue
+
             if state.should_evaluate(
                 canonical_id=m.canonical_id,
                 release_date=m.release_date,
                 release_evidence_level=m.release_evidence_level,
                 release_confirmed=m.release_confirmed,
+                family_id=fam_id,
             ):
-                pending.append(m)
+                pending_raw.append(m)
             elif m.canonical_id not in state.models:
-                # OBSERVED_ONLY or old release: record as SEEN, never alert
-                state.record_seen(
-                    canonical_id=m.canonical_id,
-                    display_name=m.display_name,
-                    provider=m.provider,
-                    release_date=m.release_date,
-                    release_evidence_level=m.release_evidence_level,
-                    release_confirmed=m.release_confirmed,
-                    repository_first_seen=m.repository_first_seen,
-                )
+                if m.release_evidence_level == ReleaseEvidenceLevel.OBSERVED_ONLY.value:
+                    # Post-bootstrap newly discovered model with only low-confidence evidence
+                    state.record_observed(
+                        canonical_id=m.canonical_id,
+                        display_name=m.display_name,
+                        provider=m.provider,
+                        repository_first_seen=m.repository_first_seen,
+                        family_id=fam_id,
+                    )
+                else:
+                    # Older than 60 days or missing release date -> record as SEEN
+                    state.record_seen(
+                        canonical_id=m.canonical_id,
+                        display_name=m.display_name,
+                        provider=m.provider,
+                        release_date=m.release_date,
+                        release_evidence_level=m.release_evidence_level,
+                        release_confirmed=m.release_confirmed,
+                        repository_first_seen=m.repository_first_seen,
+                        family_id=fam_id,
+                    )
+
+        # Monitor-only Release Family Folding:
+        family_groups = group_candidates_by_family(pending_raw)
+        pending = []
+        for fam_id, group_models in family_groups.items():
+            rep = select_family_representative(group_models)
+            pending.append(rep)
 
         return pending
 

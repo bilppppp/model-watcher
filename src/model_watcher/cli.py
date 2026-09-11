@@ -59,6 +59,14 @@ def run_watcher(
     quiet_on_empty: bool = True,
 ) -> int:
     """Executes single monitor cycle: check new models -> eval -> report -> update state -> exit."""
+    if force and not target_model:
+        print(
+            "[ERROR] --force is only allowed when combined with --model <MODEL>. "
+            "Bare 'run --force' is disabled to prevent unintended re-evaluation of historical state.",
+            file=sys.stderr,
+        )
+        return 1
+
     # 1. Read profile (requires calibration)
     if not profile_path.exists():
         if not sys.stdin.isatty():

@@ -42,6 +42,7 @@ class ReplaceVerdict(str, Enum):
 
 class ModelLifecycleStatus(str, Enum):
     SEEN = "SEEN"                    # Historical baseline or unconfirmed entry; not newly released
+    OBSERVED = "OBSERVED"            # Discovered post-bootstrap with only OBSERVED_ONLY evidence; awaiting trusted release confirmation
     PROVISIONAL = "PROVISIONAL"      # Newly released challenger; initial provisional evaluation completed
     MATURE = "MATURE"                # Re-evaluated ~7 days later or established incumbent
 

@@ -25,41 +25,90 @@ class ArtificialAnalysisSource(DataSource):
 
     BASE_URL = "https://artificialanalysis.ai/api/v2"
     FREE_ENDPOINT = "/language/models/free"
+    MAX_PAGES: int = 50
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY", "")
         self._cached_models: Optional[List[Dict[str, Any]]] = _GLOBAL_AA_MODELS
+        self._fetch_complete: bool = (_GLOBAL_AA_MODELS is not None)
+
+    @property
+    def is_complete(self) -> bool:
+        return self._fetch_complete
 
     def _load_data(self) -> None:
         global _GLOBAL_AA_MODELS
         if _GLOBAL_AA_MODELS is not None:
             self._cached_models = _GLOBAL_AA_MODELS
+            self._fetch_complete = True
             return
 
         if not self.api_key:
             logger.info("ARTIFICIAL_ANALYSIS_API_KEY not set. Skipping live AA API call.")
             self._cached_models = []
             _GLOBAL_AA_MODELS = []
+            self._fetch_complete = True
             return
 
-        url = f"{self.BASE_URL}{self.FREE_ENDPOINT}"
+        url_base = f"{self.BASE_URL}{self.FREE_ENDPOINT}"
+        headers = {"x-api-key": self.api_key}
+
+        all_items: List[Dict[str, Any]] = []
+        seen_keys = set()
+        page = 1
+
         try:
-            headers = {"x-api-key": self.api_key}
-            data = http_get_json(url, headers=headers, timeout=15)
-            self._cached_models = data.get("data", [])
-            _GLOBAL_AA_MODELS = self._cached_models
+            while page <= self.MAX_PAGES:
+                url = f"{url_base}?page={page}"
+                data = http_get_json(url, headers=headers, timeout=15)
+                if not data or not isinstance(data, dict):
+                    raise ValueError(f"Invalid response format at page {page}")
+
+                items = data.get("data", [])
+                for item in items:
+                    dedupe_key = item.get("id") or item.get("slug") or item.get("name")
+                    if dedupe_key and dedupe_key in seen_keys:
+                        continue
+                    if dedupe_key:
+                        seen_keys.add(dedupe_key)
+                    all_items.append(item)
+
+                pagination = data.get("pagination") if isinstance(data.get("pagination"), dict) else {}
+                has_more = pagination.get("has_more") if "has_more" in pagination else data.get("has_more")
+                total_pages = pagination.get("total_pages") if "total_pages" in pagination else data.get("total_pages")
+
+                if has_more is False:
+                    break
+                if total_pages is not None and page >= total_pages:
+                    break
+                if not items:
+                    break
+                if page >= self.MAX_PAGES:
+                    raise RuntimeError(
+                        f"Artificial Analysis pagination reached MAX_PAGES ({self.MAX_PAGES}) "
+                        f"while more pages remain (has_more={has_more}, total_pages={total_pages}). Fetch incomplete."
+                    )
+                page += 1
+
+            self._cached_models = all_items
+            _GLOBAL_AA_MODELS = all_items
+            self._fetch_complete = True
         except Exception as e:
-            logger.warning(f"Failed to fetch Artificial Analysis free language models: {e}")
+            logger.warning(f"Failed to fetch Artificial Analysis models (failed at page {page}): {e}")
             self._cached_models = []
-            _GLOBAL_AA_MODELS = []
+            _GLOBAL_AA_MODELS = None
+            self._fetch_complete = False
 
     def discover_models(self) -> List[ModelMetadata]:
         self._load_data()
+        if not self._fetch_complete and self.api_key:
+            logger.warning("Artificial Analysis fetch failed or incomplete; returning empty results.")
+            return []
         results = []
         for item in self._cached_models or []:
             name = item.get("name", "")
-            slug = item.get("slug", "")
-            creator = (item.get("model_creator") or {}).get("name", "Unknown")
+            slug = item.get("slug") or item.get("id") or ""
+            creator = (item.get("model_creator") or {}).get("name") or item.get("creator") or "Unknown"
             rel_date = item.get("release_date")
             pricing = item.get("pricing") or {}
             perf = item.get("performance") or {}

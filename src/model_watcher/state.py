@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from typing import Any, Dict, Optional
 
+from model_watcher.family import get_release_family_id
 from model_watcher.types import ModelLifecycleStatus, ReleaseEvidenceLevel
 
 
@@ -50,15 +51,19 @@ class TrackedModelRecord:
     report_ref: Optional[str] = None
     last_evidence_hash: str = ""
     re_eval_count: int = 0
+    family_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TrackedModelRecord":
+        canonical_id = data["canonical_id"]
+        display_name = data.get("display_name", canonical_id)
+        family_id = data.get("family_id") or get_release_family_id(canonical_id, display_name)
         return cls(
-            canonical_id=data["canonical_id"],
-            display_name=data.get("display_name", data["canonical_id"]),
+            canonical_id=canonical_id,
+            display_name=display_name,
             provider=data.get("provider", "Unknown"),
             benchmark_first_seen=data.get("benchmark_first_seen") or data.get("first_seen") or datetime.now(timezone.utc).isoformat(),
             repository_first_seen=data.get("repository_first_seen"),
@@ -70,6 +75,7 @@ class TrackedModelRecord:
             report_ref=data.get("report_ref"),
             last_evidence_hash=data.get("last_evidence_hash", ""),
             re_eval_count=data.get("re_eval_count", 0),
+            family_id=family_id,
         )
 
 
@@ -78,6 +84,47 @@ class WatcherState:
     version: str = "1.0"
     last_run: Optional[str] = None
     models: Dict[str, TrackedModelRecord] = field(default_factory=dict)
+
+    def is_family_evaluated(self, family_id: str) -> bool:
+        """Returns True if any model in this release family has already been evaluated."""
+        if not family_id:
+            return False
+        for rec in self.models.values():
+            rec_fam = rec.family_id or get_release_family_id(rec.canonical_id, rec.display_name)
+            if rec_fam == family_id and rec.status in (ModelLifecycleStatus.PROVISIONAL.value, ModelLifecycleStatus.MATURE.value):
+                return True
+        return False
+
+    def is_family_seen(self, family_id: str) -> bool:
+        """Returns True if any model in this release family is marked as historical SEEN."""
+        if not family_id:
+            return False
+        for rec in self.models.values():
+            rec_fam = rec.family_id or get_release_family_id(rec.canonical_id, rec.display_name)
+            if rec_fam == family_id and rec.status == ModelLifecycleStatus.SEEN.value:
+                return True
+        return False
+
+    def is_family_suppressed(self, family_id: str) -> bool:
+        """Returns True if this release family should suppress new unsolicited reports.
+
+        Semantics:
+        - SEEN: historical baseline family -> suppresses effort siblings
+        - OBSERVED: pending trusted confirmation -> does NOT suppress TRUSTED/CONFIRMED sibling
+        - PROVISIONAL: already evaluated/reported -> suppresses effort siblings
+        - MATURE: already evaluated/reported -> suppresses effort siblings
+        """
+        if not family_id:
+            return False
+        for rec in self.models.values():
+            rec_fam = rec.family_id or get_release_family_id(rec.canonical_id, rec.display_name)
+            if rec_fam == family_id and rec.status in (
+                ModelLifecycleStatus.SEEN.value,
+                ModelLifecycleStatus.PROVISIONAL.value,
+                ModelLifecycleStatus.MATURE.value,
+            ):
+                return True
+        return False
 
     def record_seen(
         self,
@@ -88,9 +135,11 @@ class WatcherState:
         release_evidence_level: str = ReleaseEvidenceLevel.OBSERVED_ONLY.value,
         release_confirmed: bool = False,
         repository_first_seen: Optional[str] = None,
+        family_id: Optional[str] = None,
     ) -> TrackedModelRecord:
         """Records a model as known historical baseline without generating an evaluation report."""
         now_str = datetime.now(timezone.utc).isoformat()
+        fam = family_id or get_release_family_id(canonical_id, display_name)
         if canonical_id in self.models:
             rec = self.models[canonical_id]
             if release_date and not rec.release_date:
@@ -99,6 +148,8 @@ class WatcherState:
                 rec.release_confirmed = release_confirmed
             if repository_first_seen and not rec.repository_first_seen:
                 rec.repository_first_seen = repository_first_seen
+            if not rec.family_id:
+                rec.family_id = fam
             return rec
 
         rec = TrackedModelRecord(
@@ -115,6 +166,45 @@ class WatcherState:
             report_ref=None,
             last_evidence_hash="",
             re_eval_count=0,
+            family_id=fam,
+        )
+        self.models[canonical_id] = rec
+        return rec
+
+    def record_observed(
+        self,
+        canonical_id: str,
+        display_name: str,
+        provider: str,
+        repository_first_seen: Optional[str] = None,
+        family_id: Optional[str] = None,
+    ) -> TrackedModelRecord:
+        """Records a post-bootstrap discovered model with only OBSERVED_ONLY evidence."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        fam = family_id or get_release_family_id(canonical_id, display_name)
+        if canonical_id in self.models:
+            rec = self.models[canonical_id]
+            if repository_first_seen and not rec.repository_first_seen:
+                rec.repository_first_seen = repository_first_seen
+            if not rec.family_id:
+                rec.family_id = fam
+            return rec
+
+        rec = TrackedModelRecord(
+            canonical_id=canonical_id,
+            display_name=display_name,
+            provider=provider,
+            benchmark_first_seen=now_str,
+            repository_first_seen=repository_first_seen,
+            release_date=None,
+            release_evidence_level=ReleaseEvidenceLevel.OBSERVED_ONLY.value,
+            release_confirmed=False,
+            evaluated_at=None,
+            status=ModelLifecycleStatus.OBSERVED.value,
+            report_ref=None,
+            last_evidence_hash="",
+            re_eval_count=0,
+            family_id=fam,
         )
         self.models[canonical_id] = rec
         return rec
@@ -126,6 +216,7 @@ class WatcherState:
         release_evidence_level: str = ReleaseEvidenceLevel.OBSERVED_ONLY.value,
         release_confirmed: bool = False,
         force: bool = False,
+        family_id: Optional[str] = None,
     ) -> bool:
         """Determines if a candidate model qualifies for evaluation on this run.
 
@@ -133,6 +224,9 @@ class WatcherState:
         - CONFIRMED / TRUSTED: qualified if release_date is within 60 days.
         - INFERRED: qualified if release_date is within 60 days (report must annotate inferred).
         - OBSERVED_ONLY: strictly not qualified for unsolicited 'new release' alert.
+        - OBSERVED upgrade: if previously OBSERVED and now receives CONFIRMED/TRUSTED/INFERRED
+          within 60 days -> evaluate. If older than 60 days -> transition to SEEN.
+        - Evaluated family check: if release family was already evaluated -> do not evaluate again.
         """
         if force:
             return True
@@ -152,15 +246,42 @@ class WatcherState:
                     if days_elapsed >= 7.0 and rec.re_eval_count == 0:
                         return True
                 return False
+            if rec.status == ModelLifecycleStatus.OBSERVED.value:
+                # Upgrading from OBSERVED:
+                fam = family_id or get_release_family_id(canonical_id)
+                # If another variant of this family was already baseline SEEN or evaluated, don't evaluate
+                other_suppressed = any(
+                    m.status in (
+                        ModelLifecycleStatus.SEEN.value,
+                        ModelLifecycleStatus.PROVISIONAL.value,
+                        ModelLifecycleStatus.MATURE.value,
+                    )
+                    for k, m in self.models.items()
+                    if k != canonical_id and (m.family_id or get_release_family_id(m.canonical_id)) == fam
+                )
+                if other_suppressed:
+                    rec.status = ModelLifecycleStatus.SEEN.value
+                    return False
+
+                if release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value, ReleaseEvidenceLevel.INFERRED.value):
+                    if release_date and is_recent_date(release_date, max_days=60):
+                        return True
+                    else:
+                        # Beyond monitor window -> transition to historical SEEN
+                        rec.status = ModelLifecycleStatus.SEEN.value
+                        rec.release_date = release_date
+                        rec.release_evidence_level = release_evidence_level
+                        rec.release_confirmed = release_confirmed
+                        return False
+                return False
             return False
 
         # Brand new candidate entry:
-        if release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value):
-            if release_date and is_recent_date(release_date, max_days=60):
-                return True
+        fam = family_id or get_release_family_id(canonical_id)
+        if self.is_family_suppressed(fam):
             return False
 
-        if release_evidence_level == ReleaseEvidenceLevel.INFERRED.value:
+        if release_evidence_level in (ReleaseEvidenceLevel.CONFIRMED.value, ReleaseEvidenceLevel.TRUSTED.value, ReleaseEvidenceLevel.INFERRED.value):
             if release_date and is_recent_date(release_date, max_days=60):
                 return True
             return False
@@ -179,8 +300,10 @@ class WatcherState:
         release_confirmed: bool = False,
         repository_first_seen: Optional[str] = None,
         evidence_hash: str = "",
+        family_id: Optional[str] = None,
     ) -> TrackedModelRecord:
         now_str = datetime.now(timezone.utc).isoformat()
+        fam = family_id or get_release_family_id(canonical_id, display_name)
 
         if canonical_id in self.models:
             rec = self.models[canonical_id]
@@ -189,6 +312,8 @@ class WatcherState:
             rec.report_ref = report_ref
             rec.last_evidence_hash = evidence_hash
             rec.re_eval_count += 1
+            if not rec.family_id:
+                rec.family_id = fam
             if release_date:
                 rec.release_date = release_date
                 rec.release_evidence_level = release_evidence_level
@@ -211,6 +336,7 @@ class WatcherState:
                 report_ref=report_ref,
                 last_evidence_hash=evidence_hash,
                 re_eval_count=0,
+                family_id=fam,
             )
             self.models[canonical_id] = rec
             return rec
