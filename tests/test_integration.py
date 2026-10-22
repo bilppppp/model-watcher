@@ -122,7 +122,9 @@ class TestIntegration(unittest.TestCase):
 
         ret = run_compare(
             profile_path=self.profile_path,
-            model_queries=["claude-opus-4-7"],
+            # LiveBench 2.0 table (livebench.ai/data/<date>/table.csv) no longer
+            # lists claude-opus-4-7; use a model present on the current board.
+            model_queries=["claude-opus-4.8"],
             reports_dir=self.reports_dir,
             verbose=False,
         )
@@ -144,7 +146,7 @@ class TestIntegration(unittest.TestCase):
         """Test #2: compare 多模型生成 cross-model role summary 表"""
         ret = run_compare(
             profile_path=self.profile_path,
-            model_queries=["claude-opus-4-7", "gemini-3.1-pro-preview-high"],
+            model_queries=["claude-opus-4.8", "gemini-3.1-pro"],
             reports_dir=self.reports_dir,
             verbose=False,
         )
@@ -200,7 +202,7 @@ class TestIntegration(unittest.TestCase):
         # Now run compare
         ret = run_compare(
             profile_path=self.profile_path,
-            model_queries=["claude-opus-4-7"],
+            model_queries=["claude-opus-4.8"],
             reports_dir=self.reports_dir,
             verbose=False,
         )
